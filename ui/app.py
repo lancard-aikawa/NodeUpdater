@@ -291,6 +291,10 @@ class App(tk.Tk):
 
         def work():
             results = osv.query_batch([{'name': d['name'], 'version': d['version']} for d in deps])
+            # パッケージは含まれる最も深刻な vuln の severity 順に並べる
+            results.sort(key=lambda r: min(
+                (osv.SEVERITY_ORDER.get(v['severity'], 99) for v in r['vulns']), default=99
+            ))
             return {'results': results, 'scanned': deps, 'source': source}
 
         def done(result, err):
