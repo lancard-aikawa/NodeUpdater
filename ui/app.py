@@ -323,9 +323,19 @@ class App(tk.Tk):
         info_by_nv = {(d['name'], d['version']): d for d in scanned}
         for r in results:
             info = info_by_nv.get((r['name'], r['version']), {})
-            tag = '直接' if info.get('direct') else '推移'
+            if info.get('direct'):
+                kind = '直接'
+            else:
+                roots = info.get('roots') or []
+                if roots:
+                    shown = ', '.join(roots[:5])
+                    if len(roots) > 5:
+                        shown += f' ほか{len(roots) - 5}件'
+                    kind = f'推移 ← {shown}'
+                else:
+                    kind = '推移'
             dev_tag = ' [dev]' if info.get('dev') else ''
-            self.audit_text.insert('end', f'■ {r["name"]}@{r["version"]} ({tag}{dev_tag})\n')
+            self.audit_text.insert('end', f'■ {r["name"]}@{r["version"]} ({kind}{dev_tag})\n')
             for v in r['vulns']:
                 self.audit_text.insert('end', f'  - [{v["severity"]}] {v["id"]}: {v["summary"]}\n')
                 self.audit_text.insert('end', f'    {v["url"]}\n')
