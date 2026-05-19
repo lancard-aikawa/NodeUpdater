@@ -14,6 +14,10 @@ _STATE_FILE = 'state.json'
 _MAX_RECENT = 10
 _DEFAULT_COOLDOWN_DAYS = 7  # 供給チェーン攻撃対策バッファ (uv/pip のグローバル方針と整合)
 
+DEFAULT_REGISTRY_URL = 'https://registry.npmjs.org'
+DEFAULT_OSV_API_URL = 'https://api.osv.dev/v1/querybatch'
+DEFAULT_PARALLEL_REQUESTS = 8
+
 
 def _file() -> Path:
     return cache.root_dir() / _STATE_FILE
@@ -77,4 +81,35 @@ def set_cooldown_days(days: int) -> None:
         data['cooldown_days'] = max(0, int(days))
     except (TypeError, ValueError):
         data['cooldown_days'] = _DEFAULT_COOLDOWN_DAYS
+    _save_all(data)
+
+
+def get_registry_url() -> str:
+    return (_load_all().get('registry_url') or '').strip() or DEFAULT_REGISTRY_URL
+
+
+def get_proxy_url() -> str:
+    """HTTP/HTTPS プロキシ URL。空文字なら未使用 (環境変数の HTTP(S)_PROXY を尊重)。"""
+    return (_load_all().get('proxy_url') or '').strip()
+
+
+def get_osv_api_url() -> str:
+    return (_load_all().get('osv_api_url') or '').strip() or DEFAULT_OSV_API_URL
+
+
+def get_parallel_requests() -> int:
+    val = _load_all().get('parallel_requests', DEFAULT_PARALLEL_REQUESTS)
+    try:
+        return max(1, min(32, int(val)))
+    except (TypeError, ValueError):
+        return DEFAULT_PARALLEL_REQUESTS
+
+
+def set_setting(key: str, value) -> None:
+    """空文字 / None ならキーを削除 (= デフォルトに戻す)。それ以外は保存。"""
+    data = _load_all()
+    if value in ('', None):
+        data.pop(key, None)
+    else:
+        data[key] = value
     _save_all(data)

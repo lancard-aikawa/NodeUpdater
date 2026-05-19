@@ -19,6 +19,7 @@ from core import (
     state,
 )
 
+from .settings_dialog import SettingsDialog
 from .table import PackageTable
 
 _CACHE_TTL = 24 * 60 * 60  # 24h (registry メタデータ)
@@ -67,6 +68,9 @@ class App(tk.Tk):
         )
         self.cooldown_spin.pack(side='left')
         ttk.Label(top, text='日').pack(side='left', padx=(2, 0))
+
+        self.settings_btn = ttk.Button(top, text='Settings…', command=self._open_settings)
+        self.settings_btn.pack(side='left', padx=(12, 0))
 
         # 右側: 進捗バー + ステータスラベル
         self.status_label = ttk.Label(top, text='', foreground='#0a6')
@@ -252,6 +256,10 @@ class App(tk.Tk):
             # 1 行に収まる長さに丸める
             short = msg if len(msg) <= 120 else msg[:117] + '…'
             self._set_status(f'[deprecated/{tag}] {short}', color='#c60')
+
+    # ── 設定ダイアログ ────────────────────────────────────────────────────────
+    def _open_settings(self) -> None:
+        SettingsDialog(self)
 
     # ── Cooldown 設定 ─────────────────────────────────────────────────────────
     def _on_cooldown_changed(self) -> None:

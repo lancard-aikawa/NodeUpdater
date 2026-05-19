@@ -6,8 +6,9 @@ import urllib.error
 import urllib.request
 from typing import Callable
 
+from . import state
+
 _UA = 'NodeUpdater/0.1'
-_API = 'https://api.osv.dev/v1/querybatch'
 _TIMEOUT = 25
 # OSV.dev /v1/querybatch は 1000 件/リクエストが上限。安全側に分割する。
 _BATCH_SIZE = 500
@@ -64,13 +65,21 @@ def _post_batch(queries: list[dict]) -> list[dict]:
     """単一バッチを POST。レスポンスの results を queries と同じ長さに揃えて返す。"""
     body = json.dumps({'queries': queries}).encode('utf-8')
     req = urllib.request.Request(
-        _API,
+        state.get_osv_api_url(),
         data=body,
         headers={'User-Agent': _UA, 'Content-Type': 'application/json', 'Accept': 'application/json'},
         method='POST',
     )
+    proxy = state.get_proxy_url()
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+        if proxy:
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({'http': proxy, 'https': proxy})
+            )
+            resp_cm = opener.open(req, timeout=_TIMEOUT)
+        else:
+            resp_cm = urllib.request.urlopen(req, timeout=_TIMEOUT)
+        with resp_cm as resp:
             data = json.loads(resp.read().decode('utf-8'))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
         return [{} for _ in queries]

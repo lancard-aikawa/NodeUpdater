@@ -88,10 +88,12 @@ NodeUpdater の今後追加していく可能性のある機能候補をまと�
 - **狙い**: PR / Issue / 報告書への貼り付け、定点観測。
 - **実装規模**: 小。
 
-#### 4-C. 設定ダイアログ
+#### 4-C. 設定ダイアログ [実装済み]
 - **概要**: registry URL、proxy、キャッシュ TTL を GUI から変更可能に。
 - **狙い**: 社内 registry / 認証付き proxy 環境への対応。
 - **実装規模**: 中。`state.json` に設定セクションを追加。
+- **実装**: 新規 `ui/settings_dialog.py` (Toplevel モーダル)。npm Registry URL / HTTP(S) Proxy / OSV API URL / 並列リクエスト数 (1〜32) を編集可能。`Reset to defaults` でリセット。値がデフォルトと一致するキーは `state.json` から削除して将来のデフォルト変更を拾えるようにする。
+- **未対応**: キャッシュ TTL の調整 (現状は固定: registry 24h / OSV 12h)。proxy 認証 (id:pass@host 形式の URL なら urllib が処理するが、未検証)。
 
 ## 優先度の所感
 

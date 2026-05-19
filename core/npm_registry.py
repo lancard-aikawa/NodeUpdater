@@ -8,11 +8,10 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
-from . import semver
+from . import semver, state
 
 _UA = 'NodeUpdater/0.1'
 _TIMEOUT = 10
-_REGISTRY = 'https://registry.npmjs.org'
 
 
 def _encode_pkg(name: str) -> str:
@@ -20,10 +19,21 @@ def _encode_pkg(name: str) -> str:
     return name.replace('@', '%40', 1).replace('/', '%2F')
 
 
+def _open(req: urllib.request.Request, timeout: int):
+    """proxy 設定があればそれを経由して開く。"""
+    proxy = state.get_proxy_url()
+    if proxy:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({'http': proxy, 'https': proxy})
+        )
+        return opener.open(req, timeout=timeout)
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
 def _http_get_json(url: str, timeout: int = _TIMEOUT) -> dict | None:
     req = urllib.request.Request(url, headers={'User-Agent': _UA, 'Accept': 'application/json'})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _open(req, timeout) as resp:
             if resp.status != 200:
                 return None
             return json.loads(resp.read().decode('utf-8'))
@@ -90,7 +100,7 @@ def fetch_one(name: str, current_version: str | None, cooldown_days: int = 0) ->
         'provenance': None,
         'deprecated': None, 'latestDeprecated': None, 'license': None,
     }
-    data = _http_get_json(f'{_REGISTRY}/{_encode_pkg(name)}')
+    data = _http_get_json(f'{state.get_registry_url()}/{_encode_pkg(name)}')
     if not data:
         return empty
 
@@ -156,7 +166,7 @@ def fetch_one(name: str, current_version: str | None, cooldown_days: int = 0) ->
 
 def fetch_many(
     packages: list[tuple[str, str | None]],
-    max_workers: int = 8,
+    max_workers: int | None = None,
     on_progress=None,
     cooldown_days: int = 0,
 ) -> dict[str, dict]:
@@ -169,7 +179,8 @@ def fetch_many(
     total = len(packages)
     if not packages:
         return out
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+    workers = max_workers if max_workers is not None else state.get_parallel_requests()
+    with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {ex.submit(fetch_one, name, ver, cooldown_days): name for name, ver in packages}
         done = 0
         for fut in as_completed(futures):
@@ -190,7 +201,7 @@ def fetch_many(
 def search(query: str, size: int = 10) -> list[dict]:
     """`/-/v1/search` でパッケージ検索。"""
     q = urllib.parse.quote(query)
-    data = _http_get_json(f'{_REGISTRY}/-/v1/search?text={q}&size={size}', timeout=8)
+    data = _http_get_json(f'{state.get_registry_url()}/-/v1/search?text={q}&size={size}', timeout=8)
     if not data:
         return []
     out = []
@@ -208,7 +219,7 @@ def search(query: str, size: int = 10) -> list[dict]:
 def fetch_versions(name: str, limit: int = 20) -> dict:
     """全バージョン詳細（公開日・age・provenance）を新しい順に返す。"""
     empty = {'name': name, 'description': '', 'latest': None, 'versions': [], 'npmUrl': ''}
-    data = _http_get_json(f'{_REGISTRY}/{_encode_pkg(name)}', timeout=15)
+    data = _http_get_json(f'{state.get_registry_url()}/{_encode_pkg(name)}', timeout=15)
     if not data:
         return empty
 
