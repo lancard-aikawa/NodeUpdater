@@ -107,10 +107,18 @@ class App(tk.Tk):
         audit_bar.pack(fill='x')
         b7 = ttk.Button(audit_bar, text='Run OSV Scan', command=self.run_osv)
         b7.pack(side='left')
+        b8 = ttk.Button(audit_bar, text='Run npm audit', command=self.run_npm_audit)
+        b8.pack(side='left', padx=(12, 0))
+        b9 = ttk.Button(audit_bar, text='npm audit fix…',
+                        command=lambda: self._run_audit_fix(force=False))
+        b9.pack(side='left', padx=(4, 0))
+        b10 = ttk.Button(audit_bar, text='npm audit fix --force…',
+                         command=lambda: self._run_audit_fix(force=True))
+        b10.pack(side='left', padx=(4, 0))
         self.audit_text = tk.Text(self.tab_audit, wrap='none', height=20)
         self.audit_text.pack(fill='both', expand=True, padx=4, pady=4)
 
-        self._action_buttons.extend([b1, b2, b3, b3a, b3b, b4, b5, b6, b6b, b6c, b7])
+        self._action_buttons.extend([b1, b2, b3, b3a, b3b, b4, b5, b6, b6b, b6c, b7, b8, b9, b10])
 
     # ── ステータス表示 ─────────────────────────────────────────────────────────
     def _set_status(self, text: str, color: str = '#0a6') -> None:
@@ -345,6 +353,108 @@ class App(tk.Tk):
                 self.audit_text.insert('end', f'  - [{v["severity"]}] {v["id"]}: {v["summary"]}\n')
                 self.audit_text.insert('end', f'    {v["url"]}\n')
             self.audit_text.insert('end', '\n')
+
+    # ── npm audit / audit fix ────────────────────────────────────────────────
+    def run_npm_audit(self) -> None:
+        if not self.current_project:
+            messagebox.showinfo('NodeUpdater', 'Choose a project first.')
+            return
+        if not (self.current_project / 'package.json').exists():
+            messagebox.showerror('NodeUpdater', 'package.json not found.')
+            return
+        self.audit_text.delete('1.0', 'end')
+        self._set_status('Running `npm audit --json`…')
+        project_str = str(self.current_project)
+
+        def work():
+            return npm_global.run_npm_audit(project_str)
+
+        def done(result, err):
+            if err:
+                self._set_status(f'Error: {err}', color='#c00')
+                return
+            if not result:
+                self._set_status('npm audit failed', color='#c00')
+                self.audit_text.insert(
+                    'end', 'npm audit を実行できませんでした (npm 未インストール / タイムアウト)。\n'
+                )
+                return
+            self._render_npm_audit(result)
+            meta = (result.get('metadata') or {}).get('vulnerabilities') or {}
+            total = meta.get('total') or 0
+            self._set_status(f'npm audit: {total} vulnerabilities')
+
+        self._run_bg(work, done)
+
+    def _render_npm_audit(self, data: dict) -> None:
+        if data.get('error'):
+            err = data['error']
+            self.audit_text.insert('end', f'npm audit エラー: {err.get("code", "?")}\n')
+            self.audit_text.insert('end', f'{err.get("summary", "")}\n')
+            if err.get('detail'):
+                self.audit_text.insert('end', f'\n{err["detail"]}\n')
+            return
+
+        meta = (data.get('metadata') or {}).get('vulnerabilities') or {}
+        self.audit_text.insert('end', 'npm audit 結果\n')
+        self.audit_text.insert(
+            'end',
+            '注: npm audit は npm 独自 advisory DB を参照するため OSV と件数が異なる場合があります。\n\n',
+        )
+        self.audit_text.insert(
+            'end',
+            f'サマリ: critical={meta.get("critical", 0)} high={meta.get("high", 0)} '
+            f'moderate={meta.get("moderate", 0)} low={meta.get("low", 0)} '
+            f'info={meta.get("info", 0)} (total {meta.get("total", 0)})\n\n',
+        )
+
+        vulns = data.get('vulnerabilities') or {}
+        if not vulns:
+            self.audit_text.insert('end', '脆弱性は検出されませんでした。\n')
+            return
+
+        sev_order = {'critical': 0, 'high': 1, 'moderate': 2, 'low': 3, 'info': 4}
+        items = sorted(vulns.items(), key=lambda kv: sev_order.get(kv[1].get('severity', ''), 99))
+        for name, info in items:
+            sev = str(info.get('severity', 'unknown')).upper()
+            rng = info.get('range', '') or ''
+            direct = '直接' if info.get('isDirect') else '推移'
+            fix = info.get('fixAvailable')
+            if isinstance(fix, dict):
+                major = ' (major)' if fix.get('isSemVerMajor') else ''
+                fix_text = f'fix: {fix.get("name", "?")}@{fix.get("version", "?")}{major}'
+            elif fix is True:
+                fix_text = 'fix: 可'
+            else:
+                fix_text = 'fix: 不可'
+            self.audit_text.insert('end', f'■ {name} {rng} [{sev}] ({direct}) [{fix_text}]\n')
+
+    def _run_audit_fix(self, force: bool) -> None:
+        if not self.current_project:
+            messagebox.showinfo('NodeUpdater', 'Choose a project first.')
+            return
+        cmd = 'npm audit fix --force' if force else 'npm audit fix'
+        if force:
+            msg = (
+                f'新しいコマンドプロンプトで以下を実行します:\n\n  {cmd}\n\n'
+                f'実行場所: {self.current_project}\n\n'
+                f'!! --force は major バージョン更新を含む Breaking Change を\n'
+                f'   適用する可能性があります。完了後は必ず diff と動作を確認してください。\n\n'
+                f'続行しますか?'
+            )
+        else:
+            msg = (
+                f'新しいコマンドプロンプトで以下を実行します:\n\n  {cmd}\n\n'
+                f'実行場所: {self.current_project}\n\n'
+                f'続行しますか?'
+            )
+        if not messagebox.askyesno('NodeUpdater', msg):
+            return
+        try:
+            npm_global.open_command_prompt(cmd, cwd=str(self.current_project))
+            self._set_status(f'Opened prompt: {cmd}  (Refresh after completion)')
+        except OSError as e:
+            messagebox.showerror('NodeUpdater', f'プロンプトの起動に失敗しました\n\n{e}')
 
     # ── 選択行に対する操作 ────────────────────────────────────────────────────
     def _selected_pkg(self, scope: str) -> dict | None:
