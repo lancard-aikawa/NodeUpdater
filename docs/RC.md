@@ -36,10 +36,11 @@ NodeUpdater の今後追加していく可能性のある機能候補をまと�
 - **狙い**: 特に major update 時の Breaking Change 確認の手間を減らす。
 - **実装規模**: 中。GitHub API レート制限の考慮が必要 (未認証で 60 req/h)。
 
-#### 2-B. deprecation / ライセンス表示
+#### 2-B. deprecation / ライセンス表示 [実装済み]
 - **概要**: npm registry のメタデータから `deprecated` フラグと `license` フィールドを取得し、Project / Global テーブルに列追加。
 - **狙い**: deprecated パッケージの早期発見 (移行候補抽出)、GPL 系等の法務確認用途。
 - **実装規模**: 小。`core/npm_registry.py` の `fetch_many` が既に registry にアクセスしているので、取得フィールド追加のみ。
+- **実装**: `dep` 列 (`yes` / `abnd` / 空) と `License` 列を追加。選択行が deprecated ならステータスバーに registry の deprecation message を表示。
 
 #### 2-C. package size 表示
 - **概要**: bundlephobia API で minified / install size を取得して列表示。
@@ -84,11 +85,11 @@ NodeUpdater の今後追加していく可能性のある機能候補をまと�
 
 費用対効果が高い順 (現時点での主観):
 
-1. **1-D. Cooldown フィルタ** — 供給チェーン乗っ取りに対する時間バッファ。ユーザーのグローバル方針 (uv/pip) と整合
-2. **1-A. OSV 結果のキャッシュ** — 即効性大、実装小、既存資産流用可
-3. **1-C. 検索 / フィルタ** — UX 体感が大きく変わる、実装小
-4. **1-B. 依存ツリー可視化** — 既に持っている親追跡情報の自然な発展
-5. **2-B. deprecation / ライセンス表示** — registry アクセスの拡張で済む
+1. ~~**1-D. Cooldown フィルタ**~~ — 実装済み
+2. ~~**2-B. deprecation / ライセンス表示**~~ — 実装済み
+3. **1-A. OSV 結果のキャッシュ** — 即効性大、実装小、既存資産流用可
+4. **1-C. 検索 / フィルタ** — UX 体感が大きく変わる、実装小
+5. **1-B. 依存ツリー可視化** — 既に持っている親追跡情報の自然な発展
 6. **4-A. 複数選択での一括更新** — 既存ロジックの軽微な拡張
 
 優先度は要件・利用者層によって変わるため、議論の上で決める。
