@@ -19,6 +19,7 @@ class SettingsDialog(tk.Toplevel):
         self.proxy_var = tk.StringVar(value=state.get_proxy_url())
         self.osv_var = tk.StringVar(value=state.get_osv_api_url())
         self.parallel_var = tk.IntVar(value=state.get_parallel_requests())
+        self.github_token_var = tk.StringVar(value=state.get_github_token())
 
         body = ttk.Frame(self, padding=12)
         body.pack(fill='both', expand=True)
@@ -49,7 +50,17 @@ class SettingsDialog(tk.Toplevel):
         row += 1
         ttk.Spinbox(
             body, from_=1, to=32, width=6, textvariable=self.parallel_var,
-        ).grid(row=row, column=0, sticky='w', pady=(0, 12))
+        ).grid(row=row, column=0, sticky='w', pady=(0, 8))
+
+        row += 1
+        ttk.Label(
+            body,
+            text='GitHub Personal Access Token (Changelog 取得のレート緩和; state.json 平文保存):',
+        ).grid(row=row, column=0, sticky='w')
+        row += 1
+        ttk.Entry(body, textvariable=self.github_token_var, width=56, show='•').grid(
+            row=row, column=0, columnspan=2, sticky='ew', pady=(0, 12)
+        )
 
         # ── ボタン ────────────────────────────────────────────────────────────
         btns = ttk.Frame(body)
@@ -69,6 +80,7 @@ class SettingsDialog(tk.Toplevel):
         self.proxy_var.set('')
         self.osv_var.set(state.DEFAULT_OSV_API_URL)
         self.parallel_var.set(state.DEFAULT_PARALLEL_REQUESTS)
+        self.github_token_var.set('')
 
     def _save(self) -> None:
         # デフォルト値と同一なら state からも消す (キー未設定の方が将来のデフォルト変更を拾える)
@@ -85,4 +97,5 @@ class SettingsDialog(tk.Toplevel):
             'parallel_requests',
             '' if parallel == state.DEFAULT_PARALLEL_REQUESTS else parallel,
         )
+        state.set_setting('github_token', self.github_token_var.get().strip())
         self.destroy()

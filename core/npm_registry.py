@@ -70,6 +70,18 @@ def _highest_stable(versions: list[str]) -> str | None:
     return parsed[0][0]
 
 
+def _extract_repo_url(data: dict | None) -> str | None:
+    """npm registry の repository フィールドから URL を抽出。"""
+    if not isinstance(data, dict):
+        return None
+    repo = data.get('repository')
+    if isinstance(repo, str):
+        return repo
+    if isinstance(repo, dict):
+        return repo.get('url')
+    return None
+
+
 def _license_label(version_obj: dict | None, fallback: dict | None) -> str | None:
     """package metadata から SPDX 識別子相当の文字列を抽出。
 
@@ -99,6 +111,7 @@ def fetch_one(name: str, current_version: str | None, cooldown_days: int = 0) ->
         'currentAgeInDays': None, 'latestMinorAgeInDays': None, 'latestMajorAgeInDays': None,
         'provenance': None,
         'deprecated': None, 'latestDeprecated': None, 'license': None,
+        'repositoryUrl': None,
     }
     data = _http_get_json(f'{state.get_registry_url()}/{_encode_pkg(name)}')
     if not data:
@@ -161,6 +174,7 @@ def fetch_one(name: str, current_version: str | None, cooldown_days: int = 0) ->
         'deprecated': deprecated,
         'latestDeprecated': latest_deprecated,
         'license': license_str,
+        'repositoryUrl': _extract_repo_url(data),
     }
 
 

@@ -105,6 +105,11 @@ def get_parallel_requests() -> int:
         return DEFAULT_PARALLEL_REQUESTS
 
 
+def get_github_token() -> str:
+    """GitHub API のレート制限緩和用トークン (空文字なら未設定)。"""
+    return (_load_all().get('github_token') or '').strip()
+
+
 def set_setting(key: str, value) -> None:
     """空文字 / None ならキーを削除 (= デフォルトに戻す)。それ以外は保存。"""
     data = _load_all()

@@ -34,10 +34,12 @@ NodeUpdater の今後追加していく可能性のある機能候補をまと�
 
 ### 2. 判断材料の充実
 
-#### 2-A. changelog / release notes 表示
+#### 2-A. changelog / release notes 表示 [実装済み]
 - **概要**: 選択行に対して current → latest の差分の release notes を表示。GitHub Releases API または `npm view <pkg> versions` + repository から取得。
 - **狙い**: 特に major update 時の Breaking Change 確認の手間を減らす。
 - **実装規模**: 中。GitHub API レート制限の考慮が必要 (未認証で 60 req/h)。
+- **実装**: Project / Global の各タブに `Changelog…` ボタン。`core/github_releases.py` で `repository.url` を `git+`, `git@`, `ssh://`, スコープ付きいずれの形からでもパース。Releases を 24h キャッシュ (`name@version` 単位ではなく `owner/repo` 単位)。設定ダイアログに GitHub Token フィールドを追加してレート制限を 5000 req/h に拡張可能 (環境変数 `GITHUB_TOKEN` も尊重)。`ChangelogDialog` (Toplevel) は非同期取得 + current / latest / current→latest 範囲内のリリースを色分け表示。`Open on GitHub` でブラウザ起動。
+- **未対応**: Markdown のレンダリング (raw 表示)。CHANGELOG.md ファイルへのフォールバック。release notes を OSV / 監査エクスポートに含めること。
 
 #### 2-B. deprecation / ライセンス表示 [実装済み]
 - **概要**: npm registry のメタデータから `deprecated` フラグと `license` フィールドを取得し、Project / Global テーブルに列追加。

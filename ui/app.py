@@ -21,6 +21,7 @@ from core import (
     state,
 )
 
+from .changelog_dialog import ChangelogDialog
 from .settings_dialog import SettingsDialog
 from .table import PackageTable
 
@@ -112,6 +113,9 @@ class App(tk.Tk):
         b6c = ttk.Button(global_bar, text='Open on npm',
                          command=lambda: self._open_selected_npm('global'))
         b6c.pack(side='left', padx=(12, 0))
+        b6d = ttk.Button(global_bar, text='Changelog…',
+                         command=lambda: self._show_changelog('global'))
+        b6d.pack(side='left', padx=(4, 0))
         self.global_table = PackageTable(self.tab_global, on_select=self._on_row_select)
         self._make_filter_bar(self.tab_global, self.global_table, key='global')
         self.global_table.pack(fill='both', expand=True, padx=4, pady=4)
@@ -134,6 +138,9 @@ class App(tk.Tk):
         b3 = ttk.Button(project_bar, text='Open on npm',
                         command=lambda: self._open_selected_npm('project'))
         b3.pack(side='left', padx=(12, 0))
+        b3c = ttk.Button(project_bar, text='Changelog…',
+                         command=lambda: self._show_changelog('project'))
+        b3c.pack(side='left', padx=(4, 0))
 
         # 右側: ワークスペースセレクタ (モノレポ時のみ表示)
         self.workspace_var = tk.StringVar()
@@ -221,7 +228,8 @@ class App(tk.Tk):
         self.audit_text.pack(fill='both', expand=True, padx=4, pady=4)
 
         self._action_buttons.extend(
-            [b1, b2, b3, b3a, b3b, b4, b5, b6, b6b, b6c, b7, b7b, b8, b9, b10,
+            [b1, b2, b3, b3a, b3b, b3c, b4, b5, b6, b6b, b6c, b6d,
+             b7, b7b, b8, b9, b10,
              b_exp_osv, b_exp_npm,
              b_tree_refresh, b_tree_expand, b_tree_collapse]
         )
@@ -881,6 +889,21 @@ class App(tk.Tk):
             return
         webbrowser.open(f'https://www.npmjs.com/package/{pkg["name"]}')
 
+    def _show_changelog(self, scope: str) -> None:
+        pkg = self._selected_pkg(scope)
+        if not pkg:
+            messagebox.showinfo('NodeUpdater', 'Select a package first.')
+            return
+        latest = (pkg.get('latest') or pkg.get('latestMajor') or pkg.get('latestMinor')
+                  or pkg.get('current'))
+        ChangelogDialog(
+            self,
+            package_name=pkg['name'],
+            current_version=pkg.get('current'),
+            latest_version=latest,
+            repo_url=pkg.get('repositoryUrl'),
+        )
+
     def _install_selected(self, scope: str, target: str) -> None:
         """scope: 'project' | 'global'   target: 'minor' | 'major'
 
@@ -981,5 +1004,6 @@ def _build_package_list(deps: list[dict], infos: dict[str, dict]) -> list[dict]:
             'deprecated': info.get('deprecated'),
             'latestDeprecated': info.get('latestDeprecated'),
             'license': info.get('license'),
+            'repositoryUrl': info.get('repositoryUrl'),
         })
     return out
