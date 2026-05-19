@@ -12,6 +12,7 @@ from core import (
     bun_lock,
     bundlephobia,
     cache,
+    history,
     npm_global,
     npm_registry,
     osv,
@@ -23,6 +24,7 @@ from core import (
 )
 
 from .changelog_dialog import ChangelogDialog
+from .history_dialog import HistoryDialog
 from .install_dialog import InstallDialog
 from .settings_dialog import SettingsDialog
 from .table import PackageTable
@@ -82,8 +84,11 @@ class App(tk.Tk):
         self.cooldown_spin.pack(side='left')
         ttk.Label(top, text='日').pack(side='left', padx=(2, 0))
 
+        self.history_btn = ttk.Button(top, text='History…', command=self._open_history)
+        self.history_btn.pack(side='left', padx=(12, 0))
+
         self.settings_btn = ttk.Button(top, text='Settings…', command=self._open_settings)
-        self.settings_btn.pack(side='left', padx=(12, 0))
+        self.settings_btn.pack(side='left', padx=(4, 0))
 
         # 右側: 進捗バー + ステータスラベル
         self.status_label = ttk.Label(top, text='', foreground='#0a6')
@@ -304,6 +309,12 @@ class App(tk.Tk):
     # ── 設定ダイアログ ────────────────────────────────────────────────────────
     def _open_settings(self) -> None:
         SettingsDialog(self)
+
+    def _open_history(self) -> None:
+        if not self.current_project:
+            messagebox.showinfo('NodeUpdater', 'Choose a project first.')
+            return
+        HistoryDialog(self, str(self.current_project))
 
     # ── Cooldown 設定 ─────────────────────────────────────────────────────────
     def _on_cooldown_changed(self) -> None:
@@ -944,6 +955,9 @@ class App(tk.Tk):
         pm = 'npm' if is_global else pkg_manager.detect(self.current_project)
         target_label = 'Install Minor Up' if target == 'minor' else 'Install Major Up'
 
+        # 履歴用に現行版を取得 (selection から)
+        from_versions = {p['name']: p.get('current') for p in selected}
+
         dialog = InstallDialog(
             self,
             title_label=target_label,
@@ -964,6 +978,16 @@ class App(tk.Tk):
                 f'Opened prompt [{pm}]: install {len(specs)} package(s) '
                 f'({"global" if is_global else "project"})'
             )
+            # 履歴記録 (プロジェクトスコープのみ。global は記録先プロジェクトが無いため除外)
+            if not is_global and self.current_project:
+                history.append(
+                    project_path=str(self.current_project),
+                    pm=pm,
+                    scope=scope,
+                    specs=specs,
+                    workspace=self._current_workspace,
+                    from_versions=from_versions,
+                )
         except OSError as e:
             messagebox.showerror('NodeUpdater', f'プロンプトの起動に失敗しました\n\n{e}')
 

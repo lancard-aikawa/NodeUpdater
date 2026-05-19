@@ -103,6 +103,20 @@ NodeUpdater の今後追加していく可能性のある機能候補をまと�
 - **実装**: 新規 `ui/settings_dialog.py` (Toplevel モーダル)。npm Registry URL / HTTP(S) Proxy / OSV API URL / 並列リクエスト数 (1〜32) を編集可能。`Reset to defaults` でリセット。値がデフォルトと一致するキーは `state.json` から削除して将来のデフォルト変更を拾えるようにする。
 - **未対応**: キャッシュ TTL の調整 (現状は固定: registry 24h / OSV 12h)。proxy 認証 (id:pass@host 形式の URL なら urllib が処理するが、未検証)。
 
+#### 4-D. Dry-run プレビュー (PM 自動検出含む) [実装済み]
+- **概要**: 実 install 前に `--dry-run` で影響範囲を確認できるダイアログ。bun.lock / pnpm-lock / yarn.lock / package-lock の検出で PM (`bun add` / `pnpm add` / `yarn add` / `npm install`) も自動切替。
+- **狙い**: 事故防止 (特に major up の Breaking Change 巻き込み)。Bun プロジェクトで `npm install` を投げて bun.lock が更新されない問題の解消も兼ねる。
+- **実装規模**: 小〜中。
+- **実装**: 新規 `core/pkg_manager.py` (検出 + コマンド構築 + dry-run runner)、`ui/install_dialog.py` (Toplevel + 非同期 subprocess + 出力テキスト)。既存の messagebox 確認を置き換え、Install (新規プロンプト起動) と Dry-Run を同じダイアログで完結。
+- **未対応**: yarn v1 は dry-run のサポートが弱く実行されても役立たない場合あり (エラーは Text に表示)。pnpm は `pnpm install --dry-run` を代用。
+
+#### 4-E. 更新履歴ログ [実装済み]
+- **概要**: install 試行を per-project の JSON に追記し、後から「いつ何を何から何に上げようとしたか」を振り返れる。
+- **狙い**: 振り返り、ロールバック判断、報告作成。
+- **実装規模**: 小。
+- **実装**: 新規 `core/history.py` (root_dir/history/<project>.json への append / read / clear)。Install ダイアログで Install を選択した直後に `history.append(...)` で記録 (ts / pm / scope / workspace / specs / from_versions)。トップバーに `History…` ボタンを追加し、`ui/history_dialog.py` (Treeview + 詳細 Text + Clear) で閲覧。
+- **未対応**: 実コマンドの成功/失敗追跡 (新規プロンプト起動のため終了監視せず、意図ベースのログ)。CSV/Markdown エクスポートやプロジェクト横断検索。
+
 ## 優先度の所感
 
 費用対効果が高い順 (現時点での主観):
