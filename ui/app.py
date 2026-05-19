@@ -441,11 +441,15 @@ class App(tk.Tk):
         pkg_file = self.current_project / 'package.json'
         if bun_file.exists():
             mtime_src = bun_file
+            source_tag = 'bun'
         elif npm_lock_file.exists():
             mtime_src = npm_lock_file
+            source_tag = 'npm'
         else:
             mtime_src = pkg_file
-        cache_key = f'osv_{self.current_project}'
+            source_tag = 'pkg'
+        # ソース種別をキーに含める: ロック種類が後から増えても古いキャッシュと衝突しない
+        cache_key = f'osv_{self.current_project}_{source_tag}'
         if not force:
             cached = cache.load(cache_key, _OSV_CACHE_TTL, invalidate_if_newer=mtime_src)
             if cached:
