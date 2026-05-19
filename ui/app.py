@@ -87,7 +87,7 @@ class App(tk.Tk):
         b6c = ttk.Button(global_bar, text='Open on npm',
                          command=lambda: self._open_selected_npm('global'))
         b6c.pack(side='left', padx=(12, 0))
-        self.global_table = PackageTable(self.tab_global)
+        self.global_table = PackageTable(self.tab_global, on_select=self._on_row_select)
         self.global_table.pack(fill='both', expand=True, padx=4, pady=4)
 
         # Project tab (Project と Audit は対で隣接)
@@ -108,7 +108,7 @@ class App(tk.Tk):
         b3 = ttk.Button(project_bar, text='Open on npm',
                         command=lambda: self._open_selected_npm('project'))
         b3.pack(side='left', padx=(12, 0))
-        self.project_table = PackageTable(self.tab_project)
+        self.project_table = PackageTable(self.tab_project, on_select=self._on_row_select)
         self.project_table.pack(fill='both', expand=True, padx=4, pady=4)
 
         # Audit tab (Project と対)
@@ -130,6 +130,16 @@ class App(tk.Tk):
         self.audit_text.pack(fill='both', expand=True, padx=4, pady=4)
 
         self._action_buttons.extend([b1, b2, b3, b3a, b3b, b4, b5, b6, b6b, b6c, b7, b8, b9, b10])
+
+    # ── 選択時の補助表示 ──────────────────────────────────────────────────────
+    def _on_row_select(self, pkg: dict) -> None:
+        """deprecated パッケージ選択時に message を status に表示。"""
+        msg = pkg.get('deprecated') or pkg.get('latestDeprecated')
+        if msg:
+            tag = 'current' if pkg.get('deprecated') else 'latest'
+            # 1 行に収まる長さに丸める
+            short = msg if len(msg) <= 120 else msg[:117] + '…'
+            self._set_status(f'[deprecated/{tag}] {short}', color='#c60')
 
     # ── Cooldown 設定 ─────────────────────────────────────────────────────────
     def _on_cooldown_changed(self) -> None:
@@ -566,5 +576,8 @@ def _build_package_list(deps: list[dict], infos: dict[str, dict]) -> list[dict]:
             'latestMinorAgeInDays': info.get('latestMinorAgeInDays'),
             'latestMajorAgeInDays': info.get('latestMajorAgeInDays'),
             'provenance': info.get('provenance'),
+            'deprecated': info.get('deprecated'),
+            'latestDeprecated': info.get('latestDeprecated'),
+            'license': info.get('license'),
         })
     return out

@@ -22,7 +22,8 @@ class PackageTable(ttk.Frame):
     Age 列はそれぞれ左隣のバージョンに対応する公開後経過日数。
     """
 
-    COLUMNS = ('name', 'current', 'age_cur', 'minor', 'age_min', 'major', 'age_maj', 'status', 'dev', 'prov')
+    COLUMNS = ('name', 'current', 'age_cur', 'minor', 'age_min', 'major', 'age_maj',
+               'status', 'dev', 'prov', 'dep', 'license')
 
     def __init__(self, master, on_select=None):
         super().__init__(master)
@@ -30,20 +31,23 @@ class PackageTable(ttk.Frame):
 
         tree = ttk.Treeview(self, columns=self.COLUMNS, show='headings', selectmode='browse')
         # Age 列はヘッダ短縮: status 用語 (minor/major) に揃えて Cur/Min/Maj。
+        # dep: 'yes' (現行版が deprecated) / 'abnd' (package abandoned: latest も deprecated) / ''
         headings = {
-            'name':    ('Package',          240),
-            'current': ('Current',           85),
-            'age_cur': ('Cur age',           60),
-            'minor':   ('Minor up',          95),
-            'age_min': ('Min age',           60),
-            'major':   ('Major up',          95),
-            'age_maj': ('Maj age',           60),
+            'name':    ('Package',          220),
+            'current': ('Current',           80),
+            'age_cur': ('Cur age',           55),
+            'minor':   ('Minor up',          90),
+            'age_min': ('Min age',           55),
+            'major':   ('Major up',          90),
+            'age_maj': ('Maj age',           55),
             'status':  ('Status',            70),
             'dev':     ('dev',               40),
-            'prov':    ('prov',              55),
+            'prov':    ('prov',              50),
+            'dep':     ('dep',               50),
+            'license': ('License',           90),
         }
         right_aligned = {'age_cur', 'age_min', 'age_maj'}
-        centered = {'dev', 'prov', 'status'}
+        centered = {'dev', 'prov', 'status', 'dep'}
         for col, (label, width) in headings.items():
             tree.heading(col, text=label)
             if col in right_aligned:
@@ -75,6 +79,14 @@ class PackageTable(ttk.Frame):
             return ''
         return f'{days}d'
 
+    @staticmethod
+    def _dep_text(p: dict) -> str:
+        if p.get('deprecated'):
+            return 'yes'
+        if p.get('latestDeprecated'):
+            return 'abnd'
+        return ''
+
     def set_packages(self, packages: list[dict]) -> None:
         self.tree.delete(*self.tree.get_children())
         self._row_data.clear()
@@ -91,6 +103,8 @@ class PackageTable(ttk.Frame):
                 p.get('status', ''),
                 'yes' if p.get('dev') else '',
                 'yes' if p.get('provenance') else ('no' if p.get('provenance') is False else ''),
+                self._dep_text(p),
+                p.get('license') or '',
             ), tags=(p.get('status', 'unknown'),))
             self._row_data[iid] = p
 

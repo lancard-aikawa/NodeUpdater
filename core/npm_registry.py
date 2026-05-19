@@ -60,6 +60,26 @@ def _highest_stable(versions: list[str]) -> str | None:
     return parsed[0][0]
 
 
+def _license_label(version_obj: dict | None, fallback: dict | None) -> str | None:
+    """package metadata から SPDX 識別子相当の文字列を抽出。
+
+    version 単位 → top-level の順で探し、{type, url} 形式は type を採用する。
+    """
+    for src in (version_obj or {}, fallback or {}):
+        lic = src.get('license') if isinstance(src, dict) else None
+        if isinstance(lic, str) and lic.strip():
+            return lic.strip()
+        if isinstance(lic, dict) and isinstance(lic.get('type'), str):
+            return lic['type'].strip()
+        # 古い形式 (licenses: [{type, url}, ...])
+        licenses = src.get('licenses') if isinstance(src, dict) else None
+        if isinstance(licenses, list):
+            types = [l.get('type') for l in licenses if isinstance(l, dict) and l.get('type')]
+            if types:
+                return ' OR '.join(types)
+    return None
+
+
 def fetch_one(name: str, current_version: str | None, cooldown_days: int = 0) -> dict:
     """単一パッケージの情報を取得して npmChecker.js と同形式の dict を返す。"""
     empty = {
@@ -68,6 +88,7 @@ def fetch_one(name: str, current_version: str | None, cooldown_days: int = 0) ->
         'latestMinorPublishedAt': None, 'latestMajorPublishedAt': None,
         'currentAgeInDays': None, 'latestMinorAgeInDays': None, 'latestMajorAgeInDays': None,
         'provenance': None,
+        'deprecated': None, 'latestDeprecated': None, 'license': None,
     }
     data = _http_get_json(f'{_REGISTRY}/{_encode_pkg(name)}')
     if not data:
@@ -103,6 +124,17 @@ def fetch_one(name: str, current_version: str | None, cooldown_days: int = 0) ->
     latest_minor_published_at = time_map.get(latest_minor) if latest_minor else None
     latest_major_published_at = time_map.get(latest_major) if latest_major else None
 
+    # deprecated: 文字列の deprecation メッセージ。空文字も None 扱いに統一する。
+    def _dep(v: str | None) -> str | None:
+        if not v:
+            return None
+        msg = (versions.get(v) or {}).get('deprecated')
+        return msg.strip() if isinstance(msg, str) and msg.strip() else None
+
+    deprecated = _dep(current_version)
+    latest_deprecated = _dep(latest)
+    license_str = _license_label(version_data, data)
+
     return {
         'pkgName': name,
         'latest': latest,
@@ -116,6 +148,9 @@ def fetch_one(name: str, current_version: str | None, cooldown_days: int = 0) ->
         'latestMinorAgeInDays': _age_in_days(latest_minor_published_at),
         'latestMajorAgeInDays': _age_in_days(latest_major_published_at),
         'provenance': provenance,
+        'deprecated': deprecated,
+        'latestDeprecated': latest_deprecated,
+        'license': license_str,
     }
 
 
