@@ -89,6 +89,7 @@ class App(tk.Tk):
                          command=lambda: self._open_selected_npm('global'))
         b6c.pack(side='left', padx=(12, 0))
         self.global_table = PackageTable(self.tab_global, on_select=self._on_row_select)
+        self._make_filter_bar(self.tab_global, self.global_table, key='global')
         self.global_table.pack(fill='both', expand=True, padx=4, pady=4)
 
         # Project tab (Project と Audit は対で隣接)
@@ -110,6 +111,7 @@ class App(tk.Tk):
                         command=lambda: self._open_selected_npm('project'))
         b3.pack(side='left', padx=(12, 0))
         self.project_table = PackageTable(self.tab_project, on_select=self._on_row_select)
+        self._make_filter_bar(self.tab_project, self.project_table, key='project')
         self.project_table.pack(fill='both', expand=True, padx=4, pady=4)
 
         # Audit tab (Project と対)
@@ -136,6 +138,61 @@ class App(tk.Tk):
         self._action_buttons.extend(
             [b1, b2, b3, b3a, b3b, b4, b5, b6, b6b, b6c, b7, b7b, b8, b9, b10]
         )
+
+    # ── フィルタバー ──────────────────────────────────────────────────────────
+    _STATUS_OPTIONS = [
+        ('All', None),
+        ('Outdated', 'outdated'),
+        ('Major', 'major'),
+        ('Minor', 'minor'),
+        ('Both', 'both'),
+        ('Latest', 'latest'),
+        ('Unknown', 'unknown'),
+    ]
+
+    def _make_filter_bar(self, parent, table: PackageTable, key: str) -> None:
+        """Project / Global タブに名前検索・状態・dev フィルタの行を追加。"""
+        bar = ttk.Frame(parent, padding=(4, 2))
+        bar.pack(fill='x')
+
+        ttk.Label(bar, text='Filter:').pack(side='left')
+        search_var = tk.StringVar()
+        ttk.Entry(bar, textvariable=search_var, width=24).pack(side='left', padx=(4, 0))
+
+        ttk.Label(bar, text='Status:').pack(side='left', padx=(12, 4))
+        status_var = tk.StringVar(value='All')
+        status_combo = ttk.Combobox(
+            bar, textvariable=status_var, state='readonly',
+            values=[label for label, _ in self._STATUS_OPTIONS],
+            width=9,
+        )
+        status_combo.pack(side='left')
+
+        dev_var = tk.BooleanVar()
+        ttk.Checkbutton(bar, text='Dev only', variable=dev_var).pack(side='left', padx=(12, 0))
+
+        count_label = ttk.Label(bar, text='', foreground='#666')
+        count_label.pack(side='right')
+
+        def label_to_status(label: str) -> str | None:
+            for lab, val in self._STATUS_OPTIONS:
+                if lab == label:
+                    return val
+            return None
+
+        def apply_filter(*_args):
+            table.set_filter(
+                query=search_var.get(),
+                status=label_to_status(status_var.get()),
+                dev_only=dev_var.get(),
+            )
+
+        search_var.trace_add('write', apply_filter)
+        status_combo.bind('<<ComboboxSelected>>', apply_filter)
+        dev_var.trace_add('write', apply_filter)
+
+        # データ更新やフィルタ変更で再描画されるたびに件数を反映
+        table.on_render = lambda visible, total: count_label.config(text=f'{visible} / {total}')
 
     # ── 選択時の補助表示 ──────────────────────────────────────────────────────
     def _on_row_select(self, pkg: dict) -> None:
