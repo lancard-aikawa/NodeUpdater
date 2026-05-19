@@ -67,10 +67,13 @@ NodeUpdater の今後追加していく可能性のある機能候補をまと�
 - **未対応**: Tree タブ (物理 node_modules 階層モデル) は Bun に直接適用できないため、bun プロジェクトでは表示不可メッセージを出す。論理ツリー表示は follow-up 候補。
 - **未対応**: `bun.lockb` (バイナリ、Bun 1.1 以前) — `bun pm ls --json` 経由で対応可能だが Bun CLI 必須。
 
-#### 3-B. monorepo / workspaces 対応
+#### 3-B. monorepo / workspaces 対応 [実装済み]
 - **概要**: `package.json` の `workspaces` フィールドを検出し、サブプロジェクト単位でタブまたはセレクタを表示。
 - **狙い**: yarn workspaces / npm workspaces 構成のプロジェクトでも単独利用可能に。
 - **実装規模**: 中。`core/package_json.list_subprojects()` の延長として実装可能。
+- **実装**: `core/package_json.py` に `list_workspaces()` / `collect_dependencies_at(path, workspace)` を追加。検出順は bun.lock の `workspaces` セクション → 親 package.json の `workspaces` フィールド (配列または `{packages: [...]}`、glob 対応) → 単一プロジェクト。`bun_lock.parse_lock()` を共有エントリとして公開。
+- **UI**: Project タブのツールバー右側に Workspace コンボボックスを追加。モノレポ検出時のみ表示。選択変更で自動的に refresh、キャッシュキーにワークスペース path を含めて分離。
+- **未対応**: OSV / Audit / Tree タブは引き続きプロジェクト全体スコープ (workspace 選択の影響を受けない)。サブワークスペースへのピン留めインストール (`bun add --filter` 等) は未対応。
 
 #### 3-C. lockfile v1 サポート
 - **概要**: 現在 v2/v3 のみ対応。v1 (npm v6 以前) の `dependencies` ツリー形式もパース。

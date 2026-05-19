@@ -91,19 +91,26 @@ def _parse_name_version(spec: str) -> tuple[str | None, str | None]:
     return name, version
 
 
+def parse_lock(project_path: Path) -> dict | None:
+    """bun.lock を JSONC として読んで dict を返す (失敗時 None)。共有用エントリ。"""
+    lock_file = project_path / 'bun.lock'
+    if not lock_file.exists():
+        return None
+    try:
+        raw = lock_file.read_text(encoding='utf-8')
+        return json.loads(_strip_trailing_commas(raw))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def read(project_path: Path) -> list[dict]:
     """bun.lock から [{name, version, direct, dev, roots}, ...] を返す。
 
     workspaces[""] の直接依存をルート扱いにする (サブワークスペースの直接依存は
     推移扱いになるが、reverse グラフ経由でルーツに親ワークスペース名が現れる)。
     """
-    lock_file = project_path / 'bun.lock'
-    if not lock_file.exists():
-        return []
-    try:
-        raw = lock_file.read_text(encoding='utf-8')
-        data = json.loads(_strip_trailing_commas(raw))
-    except (OSError, json.JSONDecodeError):
+    data = parse_lock(project_path)
+    if not data:
         return []
 
     workspaces = data.get('workspaces') or {}

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import semver
+from . import bun_lock, semver
 
 
 def read(project_path: Path) -> dict:
@@ -49,6 +49,112 @@ def write_dependency(project_path: Path, name: str, version: str, dev: bool) -> 
     pkg[key] = dict(sorted(section.items()))
     pkg_file.parent.mkdir(parents=True, exist_ok=True)
     pkg_file.write_text(json.dumps(pkg, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+
+
+def _read_raw(project_path: Path) -> dict | None:
+    pkg_file = project_path / 'package.json'
+    if not pkg_file.exists():
+        return None
+    try:
+        return json.loads(pkg_file.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _root_workspace(project_path: Path, pkg: dict | None) -> dict:
+    name = ((pkg or {}).get('name') or '') or project_path.name or '.'
+    return {'path': '', 'name': name, 'label': f'. (root: {name})'}
+
+
+def list_workspaces(project_path: Path) -> list[dict]:
+    """モノレポなら全ワークスペースを、そうでなければルートだけの list を返す。
+
+    優先順:
+      1. bun.lock の workspaces セクション (Bun 1.2+)
+      2. package.json の workspaces フィールド (npm/yarn)
+      3. 単一プロジェクト
+    返り値の各要素: {path, name, label}。先頭は必ずルート ('')。
+    """
+    pkg = _read_raw(project_path)
+
+    # bun.lock 優先
+    bun_data = bun_lock.parse_lock(project_path)
+    if bun_data:
+        ws = bun_data.get('workspaces') or {}
+        if len(ws) > 1:
+            entries = []
+            for path, info in ws.items():
+                name = (info or {}).get('name') or (path or '.')
+                if path == '':
+                    label = f'. (root: {name})'
+                else:
+                    label = f'{path}/  ({name})' if name != path else f'{path}/'
+                entries.append({'path': path, 'name': name, 'label': label})
+            entries.sort(key=lambda w: (w['path'] != '', w['path']))
+            return entries
+
+    # npm workspaces
+    if pkg:
+        ws_field = pkg.get('workspaces')
+        ws_paths = ws_field if isinstance(ws_field, list) else (
+            (ws_field or {}).get('packages') if isinstance(ws_field, dict) else None
+        )
+        if ws_paths:
+            entries = [_root_workspace(project_path, pkg)]
+            seen = {''}
+            for pattern in ws_paths:
+                try:
+                    matches = list(project_path.glob(pattern))
+                except (OSError, ValueError):
+                    matches = []
+                for match in matches:
+                    if not match.is_dir() or not (match / 'package.json').exists():
+                        continue
+                    try:
+                        rel = match.relative_to(project_path).as_posix()
+                    except ValueError:
+                        continue
+                    if rel in seen:
+                        continue
+                    seen.add(rel)
+                    sub_pkg = _read_raw(match) or {}
+                    sub_name = sub_pkg.get('name') or rel
+                    entries.append({
+                        'path': rel, 'name': sub_name,
+                        'label': f'{rel}/  ({sub_name})' if sub_name != rel else f'{rel}/',
+                    })
+            return entries
+
+    return [_root_workspace(project_path, pkg)]
+
+
+def collect_dependencies_at(project_path: Path, workspace_path: str = '') -> list[dict]:
+    """指定ワークスペースの直接依存を [{name, version, dev}, ...] で返す。
+
+    workspace_path == '' はルートで従来の collect_dependencies と同じ挙動。
+    Bun monorepo では bun.lock の workspaces 情報を優先 (version-spec が
+    そのまま入っているため)、無ければサブフォルダの package.json を読む。
+    """
+    if workspace_path == '':
+        return collect_dependencies(project_path)
+
+    # bun.lock 経由
+    bun_data = bun_lock.parse_lock(project_path)
+    if bun_data:
+        ws = (bun_data.get('workspaces') or {}).get(workspace_path)
+        if isinstance(ws, dict):
+            out = []
+            for name, raw in (ws.get('dependencies') or {}).items():
+                out.append({'name': name, 'version': semver.normalize(raw), 'dev': False})
+            for name, raw in (ws.get('devDependencies') or {}).items():
+                out.append({'name': name, 'version': semver.normalize(raw), 'dev': True})
+            return out
+
+    # サブフォルダの package.json
+    sub_dir = project_path / workspace_path
+    if (sub_dir / 'package.json').exists():
+        return collect_dependencies(sub_dir)
+    return []
 
 
 def list_subprojects(project_path: Path) -> list[dict]:

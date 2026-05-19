@@ -41,6 +41,10 @@ class App(tk.Tk):
         self._last_osv: dict | None = None
         self._last_npm_audit: dict | None = None
 
+        # 現プロジェクトのワークスペース一覧と選択中の path ('' がルート)
+        self._workspaces: list[dict] = []
+        self._current_workspace: str = ''
+
         if initial_project:
             self.current_project = initial_project
             self._set_recent_and_select(str(initial_project))
@@ -130,6 +134,20 @@ class App(tk.Tk):
         b3 = ttk.Button(project_bar, text='Open on npm',
                         command=lambda: self._open_selected_npm('project'))
         b3.pack(side='left', padx=(12, 0))
+
+        # 右側: ワークスペースセレクタ (モノレポ時のみ表示)
+        self.workspace_var = tk.StringVar()
+        self.workspace_combo = ttk.Combobox(
+            project_bar, textvariable=self.workspace_var, state='readonly', width=32,
+        )
+        self.workspace_combo.pack(side='right', padx=(0, 4))
+        self.workspace_label = ttk.Label(project_bar, text='Workspace:')
+        self.workspace_label.pack(side='right', padx=(12, 4))
+        self.workspace_combo.bind('<<ComboboxSelected>>', self._on_workspace_changed)
+        # 初期状態は非表示 (プロジェクト読み込み時に必要なら表示)
+        self.workspace_combo.pack_forget()
+        self.workspace_label.pack_forget()
+
         self.project_table = PackageTable(self.tab_project, on_select=self._on_row_select)
         self._make_filter_bar(self.tab_project, self.project_table, key='project')
         self.project_table.pack(fill='both', expand=True, padx=4, pady=4)
@@ -344,9 +362,35 @@ class App(tk.Tk):
         # 別プロジェクトの古いスキャン結果でエクスポートしないようリセット
         self._last_osv = None
         self._last_npm_audit = None
+        self._update_workspace_selector(project_path)
         self._set_recent_and_select(str(project_path))
         self.notebook.select(self.tab_project)
         self.refresh_project()
+
+    def _update_workspace_selector(self, project_path: Path) -> None:
+        """プロジェクトを開いた時にワークスペース一覧を再構築。"""
+        self._workspaces = package_json.list_workspaces(project_path)
+        self._current_workspace = self._workspaces[0]['path'] if self._workspaces else ''
+        labels = [w['label'] for w in self._workspaces]
+        self.workspace_combo['values'] = labels
+        if labels:
+            self.workspace_combo.set(labels[0])
+        # モノレポ (>1) の時だけセレクタを表示
+        if len(self._workspaces) > 1:
+            self.workspace_label.pack(side='right', padx=(12, 4))
+            self.workspace_combo.pack(side='right', padx=(0, 4))
+        else:
+            self.workspace_label.pack_forget()
+            self.workspace_combo.pack_forget()
+
+    def _on_workspace_changed(self, _event=None) -> None:
+        selected = self.workspace_combo.get()
+        for w in self._workspaces:
+            if w['label'] == selected:
+                if w['path'] != self._current_workspace:
+                    self._current_workspace = w['path']
+                    self.refresh_project()
+                return
 
     def _set_recent_and_select(self, path_str: str) -> None:
         """履歴に追加してドロップダウンを再構築、先頭を選択状態にする。"""
@@ -378,15 +422,20 @@ class App(tk.Tk):
             return
 
         cooldown = self._cooldown()
-        cache_key = f'project_{self.current_project}_cd{cooldown}'
+        ws = self._current_workspace
+        ws_key = f'_ws_{ws.replace("/", "_")}' if ws else ''
+        cache_key = f'project_{self.current_project}_cd{cooldown}{ws_key}'
         if not force:
             cached = cache.load(cache_key, _CACHE_TTL)
             if cached:
                 self._render_project(cached, from_cache=True)
                 return
 
-        deps = package_json.collect_dependencies(self.current_project)
-        self._set_status(f'Fetching from npm registry: 0/{len(deps)} (cooldown={cooldown}d)')
+        deps = package_json.collect_dependencies_at(self.current_project, ws)
+        ws_label = f' ws={ws or "."}' if len(self._workspaces) > 1 else ''
+        self._set_status(
+            f'Fetching from npm registry: 0/{len(deps)} (cooldown={cooldown}d{ws_label})'
+        )
 
         def work():
             def on_prog(done_count, total):
