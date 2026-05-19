@@ -7,7 +7,17 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from core import cache, npm_global, npm_registry, osv, package_json, package_lock, semver, state
+from core import (
+    bun_lock,
+    cache,
+    npm_global,
+    npm_registry,
+    osv,
+    package_json,
+    package_lock,
+    semver,
+    state,
+)
 
 from .table import PackageTable
 
@@ -424,9 +434,17 @@ class App(tk.Tk):
         self.audit_text.delete('1.0', 'end')
 
         # キャッシュ: TTL 内かつ lock/package.json が更新されていなければ流用。
-        lock_file = self.current_project / 'package-lock.json'
+        # bun.lock を優先 (Bun プロジェクト)、無ければ package-lock.json、それも
+        # 無ければ package.json をソースとする。mtime ベース失効判定の対象も同じ順。
+        bun_file = self.current_project / 'bun.lock'
+        npm_lock_file = self.current_project / 'package-lock.json'
         pkg_file = self.current_project / 'package.json'
-        mtime_src = lock_file if lock_file.exists() else pkg_file
+        if bun_file.exists():
+            mtime_src = bun_file
+        elif npm_lock_file.exists():
+            mtime_src = npm_lock_file
+        else:
+            mtime_src = pkg_file
         cache_key = f'osv_{self.current_project}'
         if not force:
             cached = cache.load(cache_key, _OSV_CACHE_TTL, invalidate_if_newer=mtime_src)
@@ -442,13 +460,19 @@ class App(tk.Tk):
                 )
                 return
 
-        # package-lock.json があれば推移依存も含めて全件スキャン。
-        # 無ければ package.json の直接依存のみ (旧挙動)。
-        lock_deps = package_lock.read(self.current_project)
-        if lock_deps:
-            deps = lock_deps
+        # ロックファイルがあれば推移依存も含めて全件スキャン。
+        # bun.lock → package-lock.json → package.json (直接依存のみ) の優先順位。
+        if bun_file.exists():
+            deps = bun_lock.read(self.current_project)
+            source = 'bun.lock'
+        elif npm_lock_file.exists():
+            deps = package_lock.read(self.current_project)
             source = 'package-lock.json'
         else:
+            deps = []
+            source = ''
+
+        if not deps:
             deps = [
                 {'name': d['name'], 'version': d['version'], 'direct': True, 'dev': d.get('dev', False)}
                 for d in package_json.collect_dependencies(self.current_project)
@@ -544,8 +568,12 @@ class App(tk.Tk):
                 return
             data, vulns_map = result
             if not data:
-                self._render_tree([], 0, message='package-lock.json が見つかりません')
-                self._set_status('Tree: lock 無し', color='#a60')
+                if (project / 'bun.lock').exists():
+                    msg = 'bun.lock のツリー表示は未対応です (OSV スキャンは利用可能)'
+                else:
+                    msg = 'package-lock.json が見つかりません'
+                self._render_tree([], 0, message=msg)
+                self._set_status('Tree: 表示不可', color='#a60')
                 return
             self._render_tree(data['roots'], data['count'], vulns_map=vulns_map)
             self._set_status(

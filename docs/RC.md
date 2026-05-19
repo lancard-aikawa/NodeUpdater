@@ -57,6 +57,14 @@ NodeUpdater の今後追加していく可能性のある機能候補をまと�
 - **狙い**: 社内で混在する場合の対応。
 - **実装規模**: 中。lockfile フォーマットがそれぞれ異なるためパーサ実装が必要。
 
+#### 3-D. Bun lockfile (bun.lock) 対応 [実装済み]
+- **概要**: Bun 1.2+ のテキスト形式ロックファイル `bun.lock` (JSONC) をパースし、OSV スキャンの対象にする。
+- **狙い**: Bun ベースのプロジェクトが増えているための対応。
+- **実装規模**: 小〜中。JSONC のトレーリングカンマだけ事前に剥がして標準 `json` で読む。
+- **実装**: `core/bun_lock.py` を新規追加し `package_lock.read()` と同じ shape を返す。`workspaces[""]` の直接依存をルート扱い、`packages[*][2]` の `dependencies` / `peerDependencies` / `optionalDependencies` から reverse グラフを構築して roots を追跡。`workspace:` / `file:` / `git+` 等のローカル参照は OSV クエリ対象外。`run_osv` の優先順は bun.lock → package-lock.json → package.json。
+- **未対応**: Tree タブ (物理 node_modules 階層モデル) は Bun に直接適用できないため、bun プロジェクトでは表示不可メッセージを出す。論理ツリー表示は follow-up 候補。
+- **未対応**: `bun.lockb` (バイナリ、Bun 1.1 以前) — `bun pm ls --json` 経由で対応可能だが Bun CLI 必須。
+
 #### 3-B. monorepo / workspaces 対応
 - **概要**: `package.json` の `workspaces` フィールドを検出し、サブプロジェクト単位でタブまたはセレクタを表示。
 - **狙い**: yarn workspaces / npm workspaces 構成のプロジェクトでも単独利用可能に。
