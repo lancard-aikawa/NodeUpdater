@@ -83,10 +83,11 @@ NodeUpdater の今後追加していく可能性のある機能候補をまと�
 - **実装規模**: 小。`PackageTable.get_selected()` を複数対応に拡張、`_install_selected` をループ化。
 - **実装**: Treeview を `selectmode='extended'` に変更し `get_selected_all()` を追加。1 つの `npm install a@x b@y c@z` にまとめて起動。対象更新が無いパッケージはスキップし、確認ダイアログにスキップ件数も表示。
 
-#### 4-B. 監査レポートのエクスポート
+#### 4-B. 監査レポートのエクスポート [実装済み]
 - **概要**: OSV / npm audit の結果を Markdown または CSV で出力。
 - **狙い**: PR / Issue / 報告書への貼り付け、定点観測。
 - **実装規模**: 小。
+- **実装**: `core/audit_export.py` に Markdown / CSV シリアライザを追加。Audit タブ 2 段目に `Export OSV…` / `Export npm audit…` ボタン。保存ダイアログの拡張子 (`.md` / `.csv`) で形式を自動判別。OSV は直近スキャン結果 (キャッシュからのロード分も含む) を、npm audit は直近の `npm audit --json` 出力を保持して書き出す。プロジェクト切替時はバッファをクリアする。
 
 #### 4-C. 設定ダイアログ [実装済み]
 - **概要**: registry URL、proxy、キャッシュ TTL を GUI から変更可能に。

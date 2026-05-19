@@ -8,6 +8,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from core import (
+    audit_export,
     bun_lock,
     cache,
     npm_global,
@@ -34,6 +35,10 @@ class App(tk.Tk):
         self.minsize(820, 480)
 
         self._build_layout()
+
+        # エクスポート用に直近の OSV / npm audit 結果を保持
+        self._last_osv: dict | None = None
+        self._last_npm_audit: dict | None = None
 
         if initial_project:
             self.current_project = initial_project
@@ -184,11 +189,21 @@ class App(tk.Tk):
         b10 = ttk.Button(audit_bar, text='npm audit fix --force…',
                          command=lambda: self._run_audit_fix(force=True))
         b10.pack(side='left', padx=(4, 0))
+
+        # エクスポート用の 2 段目
+        export_bar = ttk.Frame(self.tab_audit, padding=(4, 0))
+        export_bar.pack(fill='x')
+        b_exp_osv = ttk.Button(export_bar, text='Export OSV…', command=self._export_osv)
+        b_exp_osv.pack(side='left')
+        b_exp_npm = ttk.Button(export_bar, text='Export npm audit…', command=self._export_npm_audit)
+        b_exp_npm.pack(side='left', padx=(8, 0))
+
         self.audit_text = tk.Text(self.tab_audit, wrap='none', height=20)
         self.audit_text.pack(fill='both', expand=True, padx=4, pady=4)
 
         self._action_buttons.extend(
             [b1, b2, b3, b3a, b3b, b4, b5, b6, b6b, b6c, b7, b7b, b8, b9, b10,
+             b_exp_osv, b_exp_npm,
              b_tree_refresh, b_tree_expand, b_tree_collapse]
         )
 
@@ -325,6 +340,9 @@ class App(tk.Tk):
     def _open_project(self, project_path: Path) -> None:
         """新しいプロジェクトを選択した時の共通処理: 履歴更新 + 切り替え + refresh。"""
         self.current_project = project_path
+        # 別プロジェクトの古いスキャン結果でエクスポートしないようリセット
+        self._last_osv = None
+        self._last_npm_audit = None
         self._set_recent_and_select(str(project_path))
         self.notebook.select(self.tab_project)
         self.refresh_project()
@@ -461,6 +479,7 @@ class App(tk.Tk):
         if not force:
             cached = cache.load(cache_key, _OSV_CACHE_TTL, invalidate_if_newer=mtime_src)
             if cached:
+                self._last_osv = cached
                 self._render_osv(
                     cached.get('results') or [],
                     cached.get('scanned') or [],
@@ -513,6 +532,7 @@ class App(tk.Tk):
                 self._set_status(f'Error: {err}', color='#c00')
                 return
             cache.save(cache_key, result)
+            self._last_osv = result
             self._render_osv(result['results'] or [], result['scanned'], result['source'])
             self._set_status(
                 f'OSV: {len(result["results"] or [])} vulnerable / {len(result["scanned"])} scanned'
@@ -552,6 +572,37 @@ class App(tk.Tk):
                 self.audit_text.insert('end', f'  - [{v["severity"]}] {v["id"]}: {v["summary"]}\n')
                 self.audit_text.insert('end', f'    {v["url"]}\n')
             self.audit_text.insert('end', '\n')
+
+    # ── エクスポート ─────────────────────────────────────────────────────────
+    def _export_save(self, data, kind: str, to_text) -> None:
+        """共通: 保存ダイアログ → 拡張子で md/csv 自動判別 → 書き出し。"""
+        if not data:
+            messagebox.showinfo(
+                'NodeUpdater', f'{kind} の結果がまだありません。先に実行してください。'
+            )
+            return
+        project_name = self.current_project.name if self.current_project else 'report'
+        default = f'{kind}_{project_name}.md'
+        path = filedialog.asksaveasfilename(
+            defaultextension='.md',
+            initialfile=default,
+            filetypes=[('Markdown', '*.md'), ('CSV', '*.csv'), ('All files', '*.*')],
+        )
+        if not path:
+            return
+        fmt = 'csv' if path.lower().endswith('.csv') else 'markdown'
+        try:
+            text = to_text(data, fmt=fmt, project_path=str(self.current_project or ''))
+            Path(path).write_text(text, encoding='utf-8')
+            self._set_status(f'Exported {kind} report: {path}')
+        except OSError as e:
+            messagebox.showerror('NodeUpdater', f'書き込みエラー\n\n{e}')
+
+    def _export_osv(self) -> None:
+        self._export_save(self._last_osv, 'osv', audit_export.osv_to_text)
+
+    def _export_npm_audit(self) -> None:
+        self._export_save(self._last_npm_audit, 'npm_audit', audit_export.npm_audit_to_text)
 
     # ── Tree タブ ─────────────────────────────────────────────────────────────
     def refresh_tree(self) -> None:
@@ -675,6 +726,7 @@ class App(tk.Tk):
                     'end', 'npm audit を実行できませんでした (npm 未インストール / タイムアウト)。\n'
                 )
                 return
+            self._last_npm_audit = result
             self._render_npm_audit(result)
             meta = (result.get('metadata') or {}).get('vulnerabilities') or {}
             total = meta.get('total') or 0
