@@ -12,6 +12,7 @@ from . import cache
 
 _STATE_FILE = 'state.json'
 _MAX_RECENT = 10
+_DEFAULT_COOLDOWN_DAYS = 7  # 供給チェーン攻撃対策バッファ (uv/pip のグローバル方針と整合)
 
 
 def _file() -> Path:
@@ -59,3 +60,21 @@ def remove_recent_project(path: str) -> list[str]:
     data['recent_projects'] = items
     _save_all(data)
     return items
+
+
+def get_cooldown_days() -> int:
+    """更新候補から除外する公開後経過日数 (供給チェーン攻撃対策バッファ)。"""
+    val = _load_all().get('cooldown_days', _DEFAULT_COOLDOWN_DAYS)
+    try:
+        return max(0, int(val))
+    except (TypeError, ValueError):
+        return _DEFAULT_COOLDOWN_DAYS
+
+
+def set_cooldown_days(days: int) -> None:
+    data = _load_all()
+    try:
+        data['cooldown_days'] = max(0, int(days))
+    except (TypeError, ValueError):
+        data['cooldown_days'] = _DEFAULT_COOLDOWN_DAYS
+    _save_all(data)

@@ -6,7 +6,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import semver
 
@@ -41,7 +41,26 @@ def _age_in_days(iso_ts: str | None) -> int | None:
         return None
 
 
-def fetch_one(name: str, current_version: str | None) -> dict:
+def _is_after(iso_ts: str | None, cutoff: datetime) -> bool:
+    """iso_ts が cutoff より後 (= 新しすぎる) なら True。"""
+    if not iso_ts:
+        return False
+    try:
+        return datetime.fromisoformat(iso_ts.replace('Z', '+00:00')) > cutoff
+    except (ValueError, TypeError):
+        return False
+
+
+def _highest_stable(versions: list[str]) -> str | None:
+    parsed = [(v, semver.parse(v)) for v in versions if v and '-' not in v]
+    parsed = [(v, p) for v, p in parsed if p]
+    if not parsed:
+        return None
+    parsed.sort(key=lambda t: (t[1].major, t[1].minor, t[1].patch), reverse=True)
+    return parsed[0][0]
+
+
+def fetch_one(name: str, current_version: str | None, cooldown_days: int = 0) -> dict:
     """単一パッケージの情報を取得して npmChecker.js と同形式の dict を返す。"""
     empty = {
         'pkgName': name, 'latest': None, 'latestMinor': None, 'latestMajor': None,
@@ -54,18 +73,32 @@ def fetch_one(name: str, current_version: str | None) -> dict:
     if not data:
         return empty
 
-    latest = (data.get('dist-tags') or {}).get('latest')
+    raw_latest = (data.get('dist-tags') or {}).get('latest')
     time_map = data.get('time') or {}
     versions = data.get('versions') or {}
 
-    latest_published_at = time_map.get(latest) if latest else None
     current_published_at = time_map.get(current_version) if current_version else None
 
     version_data = versions.get(current_version) if current_version else None
     provenance = bool((version_data or {}).get('dist', {}).get('attestations')) if version_data is not None else None
 
+    # 供給チェーンバッファ: cutoff より新しい版は候補集合から除外。
+    # current_version はユーザーが既に使っているので除外対象外 (age 表示のため必要)。
     all_versions = list(versions.keys())
-    latest_minor, latest_major = semver.pick_latest_minor_and_major(current_version, all_versions, latest)
+    if cooldown_days > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=cooldown_days)
+        eligible = [v for v in all_versions if not _is_after(time_map.get(v), cutoff)]
+    else:
+        eligible = all_versions
+
+    # cooldown により dist-tags.latest が除外されたら、cutoff 以前の最高 stable を採用
+    if raw_latest and raw_latest in eligible:
+        latest = raw_latest
+    else:
+        latest = _highest_stable(eligible) or raw_latest
+
+    latest_published_at = time_map.get(latest) if latest else None
+    latest_minor, latest_major = semver.pick_latest_minor_and_major(current_version, eligible, latest)
 
     latest_minor_published_at = time_map.get(latest_minor) if latest_minor else None
     latest_major_published_at = time_map.get(latest_major) if latest_major else None
@@ -90,17 +123,19 @@ def fetch_many(
     packages: list[tuple[str, str | None]],
     max_workers: int = 8,
     on_progress=None,
+    cooldown_days: int = 0,
 ) -> dict[str, dict]:
     """[(name, current_version), ...] を並列で問い合わせて name → info を返す。
 
     on_progress(done, total) が指定されていれば各完了時に呼ぶ（別スレッドから）。
+    cooldown_days > 0 のとき、その日数以内に公開された版は候補から除外する。
     """
     out: dict[str, dict] = {}
     total = len(packages)
     if not packages:
         return out
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(fetch_one, name, ver): name for name, ver in packages}
+        futures = {ex.submit(fetch_one, name, ver, cooldown_days): name for name, ver in packages}
         done = 0
         for fut in as_completed(futures):
             name = futures[fut]

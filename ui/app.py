@@ -46,6 +46,17 @@ class App(tk.Tk):
         self.choose_btn = ttk.Button(top, text='Choose…', command=self.choose_project)
         self.choose_btn.pack(side='left')
 
+        # 供給チェーンバッファ: 公開から N 日経っていない版を最新候補から除外する
+        ttk.Label(top, text='  Cooldown:').pack(side='left', padx=(12, 2))
+        self.cooldown_var = tk.IntVar(value=state.get_cooldown_days())
+        self.cooldown_spin = ttk.Spinbox(
+            top, from_=0, to=90, width=4,
+            textvariable=self.cooldown_var,
+            command=self._on_cooldown_changed,
+        )
+        self.cooldown_spin.pack(side='left')
+        ttk.Label(top, text='日').pack(side='left', padx=(2, 0))
+
         # 右側: 進捗バー + ステータスラベル
         self.status_label = ttk.Label(top, text='', foreground='#0a6')
         self.status_label.pack(side='right')
@@ -119,6 +130,22 @@ class App(tk.Tk):
         self.audit_text.pack(fill='both', expand=True, padx=4, pady=4)
 
         self._action_buttons.extend([b1, b2, b3, b3a, b3b, b4, b5, b6, b6b, b6c, b7, b8, b9, b10])
+
+    # ── Cooldown 設定 ─────────────────────────────────────────────────────────
+    def _on_cooldown_changed(self) -> None:
+        """Spinbox 操作で永続化。実反映は次回 Refresh から。"""
+        try:
+            days = max(0, int(self.cooldown_var.get()))
+        except (TypeError, ValueError):
+            days = 7
+        state.set_cooldown_days(days)
+        self._set_status(f'Cooldown を {days} 日に設定 (Refresh で反映)')
+
+    def _cooldown(self) -> int:
+        try:
+            return max(0, int(self.cooldown_var.get()))
+        except (TypeError, ValueError):
+            return state.get_cooldown_days()
 
     # ── ステータス表示 ─────────────────────────────────────────────────────────
     def _set_status(self, text: str, color: str = '#0a6') -> None:
@@ -201,7 +228,8 @@ class App(tk.Tk):
             messagebox.showerror('NodeUpdater', f'package.json not found in:\n{self.current_project}')
             return
 
-        cache_key = f'project_{self.current_project}'
+        cooldown = self._cooldown()
+        cache_key = f'project_{self.current_project}_cd{cooldown}'
         if not force:
             cached = cache.load(cache_key, _CACHE_TTL)
             if cached:
@@ -209,7 +237,7 @@ class App(tk.Tk):
                 return
 
         deps = package_json.collect_dependencies(self.current_project)
-        self._set_status(f'Fetching from npm registry: 0/{len(deps)}')
+        self._set_status(f'Fetching from npm registry: 0/{len(deps)} (cooldown={cooldown}d)')
 
         def work():
             def on_prog(done_count, total):
@@ -217,6 +245,7 @@ class App(tk.Tk):
             infos = npm_registry.fetch_many(
                 [(d['name'], d['version']) for d in deps],
                 on_progress=on_prog,
+                cooldown_days=cooldown,
             )
             return _build_package_list(deps, infos)
 
@@ -234,14 +263,15 @@ class App(tk.Tk):
         self._set_status('Loaded from cache' if from_cache else 'Updated')
 
     def refresh_global(self, force: bool = False) -> None:
-        cache_key = 'global_npm'
+        cooldown = self._cooldown()
+        cache_key = f'global_npm_cd{cooldown}'
         if not force:
             cached = cache.load(cache_key, _CACHE_TTL)
             if cached:
                 self._render_global(cached, from_cache=True)
                 return
 
-        self._set_status('Listing global packages (npm list -g)…')
+        self._set_status(f'Listing global packages (npm list -g)… (cooldown={cooldown}d)')
 
         def work():
             installed = npm_global.list_global_packages()
@@ -255,6 +285,7 @@ class App(tk.Tk):
             infos = npm_registry.fetch_many(
                 [(d['name'], d['version']) for d in deps],
                 on_progress=on_prog,
+                cooldown_days=cooldown,
             )
             return {'packages': _build_package_list(deps, infos)}
 
