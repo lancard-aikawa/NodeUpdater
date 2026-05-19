@@ -54,8 +54,13 @@ def _key_to_filename(key: str) -> str:
     return _SAFE_KEY.sub('_', key)[:120] + '.json'
 
 
-def load(key: str, ttl_seconds: int) -> dict | None:
-    """TTL 内なら data を返す。期限切れ・無し・破損なら None。"""
+def load(key: str, ttl_seconds: int, invalidate_if_newer: Path | None = None) -> dict | None:
+    """TTL 内なら data を返す。期限切れ・無し・破損なら None。
+
+    invalidate_if_newer に Path を渡すと、そのファイルの mtime がキャッシュ
+    生成時刻より新しい場合も失効扱いにする (lockfile が更新されたら再スキャン
+    したいケース向け)。
+    """
     file = cache_dir() / _key_to_filename(key)
     try:
         obj = json.loads(file.read_text(encoding='utf-8'))
@@ -64,6 +69,12 @@ def load(key: str, ttl_seconds: int) -> dict | None:
     cached_at = obj.get('cachedAt', 0) / 1000.0  # ms → s
     if time.time() - cached_at >= ttl_seconds:
         return None
+    if invalidate_if_newer is not None:
+        try:
+            if invalidate_if_newer.stat().st_mtime > cached_at:
+                return None
+        except OSError:
+            pass
     return obj.get('data')
 
 

@@ -11,7 +11,8 @@ from core import cache, npm_global, npm_registry, osv, package_json, package_loc
 
 from .table import PackageTable
 
-_CACHE_TTL = 24 * 60 * 60  # 24h
+_CACHE_TTL = 24 * 60 * 60  # 24h (registry メタデータ)
+_OSV_CACHE_TTL = 12 * 60 * 60  # 12h (脆弱性 DB は registry より変化が早い想定)
 
 
 class App(tk.Tk):
@@ -118,6 +119,9 @@ class App(tk.Tk):
         audit_bar.pack(fill='x')
         b7 = ttk.Button(audit_bar, text='Run OSV Scan', command=self.run_osv)
         b7.pack(side='left')
+        b7b = ttk.Button(audit_bar, text='Force Rescan',
+                         command=lambda: self.run_osv(force=True))
+        b7b.pack(side='left', padx=(4, 0))
         b8 = ttk.Button(audit_bar, text='Run npm audit', command=self.run_npm_audit)
         b8.pack(side='left', padx=(12, 0))
         b9 = ttk.Button(audit_bar, text='npm audit fix…',
@@ -129,7 +133,9 @@ class App(tk.Tk):
         self.audit_text = tk.Text(self.tab_audit, wrap='none', height=20)
         self.audit_text.pack(fill='both', expand=True, padx=4, pady=4)
 
-        self._action_buttons.extend([b1, b2, b3, b3a, b3b, b4, b5, b6, b6b, b6c, b7, b8, b9, b10])
+        self._action_buttons.extend(
+            [b1, b2, b3, b3a, b3b, b4, b5, b6, b6b, b6c, b7, b7b, b8, b9, b10]
+        )
 
     # ── 選択時の補助表示 ──────────────────────────────────────────────────────
     def _on_row_select(self, pkg: dict) -> None:
@@ -315,11 +321,30 @@ class App(tk.Tk):
             self._set_status('Loaded from cache' if from_cache else 'Updated')
         self.global_table.set_packages(payload.get('packages', []))
 
-    def run_osv(self) -> None:
+    def run_osv(self, force: bool = False) -> None:
         if not self.current_project:
             messagebox.showinfo('NodeUpdater', 'Choose a project first.')
             return
         self.audit_text.delete('1.0', 'end')
+
+        # キャッシュ: TTL 内かつ lock/package.json が更新されていなければ流用。
+        lock_file = self.current_project / 'package-lock.json'
+        pkg_file = self.current_project / 'package.json'
+        mtime_src = lock_file if lock_file.exists() else pkg_file
+        cache_key = f'osv_{self.current_project}'
+        if not force:
+            cached = cache.load(cache_key, _OSV_CACHE_TTL, invalidate_if_newer=mtime_src)
+            if cached:
+                self._render_osv(
+                    cached.get('results') or [],
+                    cached.get('scanned') or [],
+                    cached.get('source') or '(cached)',
+                )
+                self._set_status(
+                    f'OSV (cache): {len(cached.get("results") or [])} vulnerable / '
+                    f'{len(cached.get("scanned") or [])} scanned'
+                )
+                return
 
         # package-lock.json があれば推移依存も含めて全件スキャン。
         # 無ければ package.json の直接依存のみ (旧挙動)。
@@ -355,6 +380,7 @@ class App(tk.Tk):
             if err:
                 self._set_status(f'Error: {err}', color='#c00')
                 return
+            cache.save(cache_key, result)
             self._render_osv(result['results'] or [], result['scanned'], result['source'])
             self._set_status(
                 f'OSV: {len(result["results"] or [])} vulnerable / {len(result["scanned"])} scanned'

@@ -7,11 +7,12 @@ NodeUpdater の今後追加していく可能性のある機能候補をまと�
 
 ### 1. 運用品質の底上げ
 
-#### 1-A. OSV 結果のキャッシュ
-- **概要**: OSV スキャン結果をプロジェクト単位でキャッシュ (12h)。`package-lock.json` の mtime と比較して、lock が更新されていれば失効扱い。
+#### 1-A. OSV 結果のキャッシュ [実装済み]
+- **概要**: OSV スキャン結果をプロジェクト単位でキャッシュ (12h)。`package-lock.json` (無ければ `package.json`) の mtime と比較して、lock が更新されていれば失効扱い。
 - **狙い**: 大規模 lock (数百〜数千件) の再スキャンを体感数十倍速にする。CI/オフライン環境の利便性向上。
 - **既存参考実装**: FlutterBoard `server/osvCheck.js` の `loadOsvCache` / `saveOsvCache`。
 - **実装規模**: 小 (キャッシュ I/O 追加のみ)。`core/cache.py` が既に存在するので流用可能。
+- **実装**: `core/cache.py` の `load()` に `invalidate_if_newer: Path` 引数を追加して mtime 失効に汎用対応。Audit タブに `Force Rescan` ボタンを追加。
 
 #### 1-B. 依存ツリー可視化 (Treeview)
 - **概要**: `package-lock.json` の `packages` から階層構造を再構築し、`ttk.Treeview` で `npm ls` 相当の表示。
@@ -87,7 +88,7 @@ NodeUpdater の今後追加していく可能性のある機能候補をまと�
 
 1. ~~**1-D. Cooldown フィルタ**~~ — 実装済み
 2. ~~**2-B. deprecation / ライセンス表示**~~ — 実装済み
-3. **1-A. OSV 結果のキャッシュ** — 即効性大、実装小、既存資産流用可
+3. ~~**1-A. OSV 結果のキャッシュ**~~ — 実装済み
 4. **1-C. 検索 / フィルタ** — UX 体感が大きく変わる、実装小
 5. **1-B. 依存ツリー可視化** — 既に持っている親追跡情報の自然な発展
 6. **4-A. 複数選択での一括更新** — 既存ロジックの軽微な拡張
