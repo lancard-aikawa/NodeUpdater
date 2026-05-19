@@ -114,6 +114,44 @@ class App(tk.Tk):
         self._make_filter_bar(self.tab_project, self.project_table, key='project')
         self.project_table.pack(fill='both', expand=True, padx=4, pady=4)
 
+        # Tree tab (Project と対: 物理 node_modules 階層を表示)
+        self.tab_tree = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_tree, text='Tree')
+        tree_bar = ttk.Frame(self.tab_tree, padding=(4, 4))
+        tree_bar.pack(fill='x')
+        b_tree_refresh = ttk.Button(tree_bar, text='Refresh', command=self.refresh_tree)
+        b_tree_refresh.pack(side='left')
+        b_tree_expand = ttk.Button(tree_bar, text='Expand all', command=self._tree_expand_all)
+        b_tree_expand.pack(side='left', padx=(8, 0))
+        b_tree_collapse = ttk.Button(tree_bar, text='Collapse all', command=self._tree_collapse_all)
+        b_tree_collapse.pack(side='left', padx=(4, 0))
+        self.tree_count_label = ttk.Label(tree_bar, text='', foreground='#666')
+        self.tree_count_label.pack(side='right')
+
+        tree_frame = ttk.Frame(self.tab_tree)
+        tree_frame.pack(fill='both', expand=True, padx=4, pady=4)
+        self.dep_tree = ttk.Treeview(
+            tree_frame,
+            columns=('version', 'flags'),
+            show='tree headings',
+            selectmode='browse',
+        )
+        self.dep_tree.heading('#0', text='Package')
+        self.dep_tree.heading('version', text='Version')
+        self.dep_tree.heading('flags', text='Flags')
+        self.dep_tree.column('#0', width=400, stretch=True)
+        self.dep_tree.column('version', width=100, anchor='w')
+        self.dep_tree.column('flags', width=120, anchor='w')
+        # 脆弱性のあるノードを強調
+        self.dep_tree.tag_configure('vuln', background='#ffd0d0')
+        self.dep_tree.tag_configure('dev', foreground='#888')
+        tree_vsb = ttk.Scrollbar(tree_frame, orient='vertical', command=self.dep_tree.yview)
+        self.dep_tree.configure(yscrollcommand=tree_vsb.set)
+        self.dep_tree.grid(row=0, column=0, sticky='nsew')
+        tree_vsb.grid(row=0, column=1, sticky='ns')
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+
         # Audit tab (Project と対)
         self.tab_audit = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_audit, text='Audit (OSV)')
@@ -136,7 +174,8 @@ class App(tk.Tk):
         self.audit_text.pack(fill='both', expand=True, padx=4, pady=4)
 
         self._action_buttons.extend(
-            [b1, b2, b3, b3a, b3b, b4, b5, b6, b6b, b6c, b7, b7b, b8, b9, b10]
+            [b1, b2, b3, b3a, b3b, b4, b5, b6, b6b, b6c, b7, b7b, b8, b9, b10,
+             b_tree_refresh, b_tree_expand, b_tree_collapse]
         )
 
     # ── フィルタバー ──────────────────────────────────────────────────────────
@@ -477,6 +516,99 @@ class App(tk.Tk):
                 self.audit_text.insert('end', f'  - [{v["severity"]}] {v["id"]}: {v["summary"]}\n')
                 self.audit_text.insert('end', f'    {v["url"]}\n')
             self.audit_text.insert('end', '\n')
+
+    # ── Tree タブ ─────────────────────────────────────────────────────────────
+    def refresh_tree(self) -> None:
+        if not self.current_project:
+            messagebox.showinfo('NodeUpdater', 'Choose a project first.')
+            return
+        self._render_tree([], 0, message='Loading…')
+        project = self.current_project
+
+        def work():
+            data = package_lock.build_tree(project)
+            # OSV キャッシュがあれば脆弱性のあるノードを強調する材料に
+            vulns_map: dict[tuple[str, str], int] = {}
+            lock_file = project / 'package-lock.json'
+            mtime_src = lock_file if lock_file.exists() else (project / 'package.json')
+            osv_cache = cache.load(f'osv_{project}', _OSV_CACHE_TTL, invalidate_if_newer=mtime_src)
+            if osv_cache:
+                for r in (osv_cache.get('results') or []):
+                    vulns_map[(r.get('name'), r.get('version'))] = len(r.get('vulns') or [])
+            return data, vulns_map
+
+        def done(result, err):
+            if err:
+                self._set_status(f'Error: {err}', color='#c00')
+                self._render_tree([], 0, message=str(err))
+                return
+            data, vulns_map = result
+            if not data:
+                self._render_tree([], 0, message='package-lock.json が見つかりません')
+                self._set_status('Tree: lock 無し', color='#a60')
+                return
+            self._render_tree(data['roots'], data['count'], vulns_map=vulns_map)
+            self._set_status(
+                f'Tree: {data["count"]} nodes'
+                + (f' ({sum(vulns_map.values())} vulns highlighted)' if vulns_map else '')
+            )
+
+        self._run_bg(work, done)
+
+    def _render_tree(
+        self,
+        roots: list[dict],
+        count: int,
+        vulns_map: dict | None = None,
+        message: str | None = None,
+    ) -> None:
+        self.dep_tree.delete(*self.dep_tree.get_children())
+        vulns_map = vulns_map or {}
+        if message and not roots:
+            self.dep_tree.insert('', 'end', text=message, values=('', ''))
+            self.tree_count_label.config(text='')
+            return
+
+        def insert(node: dict, parent_iid: str) -> None:
+            tags: list[str] = []
+            flags: list[str] = []
+            if node.get('dev'):
+                tags.append('dev')
+                flags.append('dev')
+            nv = (node.get('name'), node.get('version'))
+            vuln_count = vulns_map.get(nv, 0)
+            if vuln_count:
+                tags.append('vuln')
+                flags.append(f'vuln×{vuln_count}')
+            iid = self.dep_tree.insert(
+                parent_iid, 'end',
+                text=node['name'],
+                values=(node.get('version', ''), ' '.join(flags)),
+                tags=tuple(tags),
+                open=(parent_iid == ''),  # ルートのみ開く
+            )
+            for child in node['children']:
+                insert(child, iid)
+
+        for r in roots:
+            insert(r, '')
+        vuln_total = sum(vulns_map.values())
+        text = f'{count} nodes'
+        if vuln_total:
+            text += f' / {vuln_total} vulns'
+        self.tree_count_label.config(text=text)
+
+    def _tree_expand_all(self) -> None:
+        def walk(iid: str) -> None:
+            self.dep_tree.item(iid, open=True)
+            for child in self.dep_tree.get_children(iid):
+                walk(child)
+        for iid in self.dep_tree.get_children(''):
+            walk(iid)
+
+    def _tree_collapse_all(self) -> None:
+        for iid in self.dep_tree.get_children(''):
+            self.dep_tree.item(iid, open=False)
 
     # ── npm audit / audit fix ────────────────────────────────────────────────
     def run_npm_audit(self) -> None:
