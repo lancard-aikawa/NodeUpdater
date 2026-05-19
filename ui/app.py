@@ -7,7 +7,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from core import cache, npm_global, npm_registry, osv, package_json, semver, state
+from core import cache, npm_global, npm_registry, osv, package_json, package_lock, semver, state
 
 from .table import PackageTable
 
@@ -271,27 +271,57 @@ class App(tk.Tk):
             messagebox.showinfo('NodeUpdater', 'Choose a project first.')
             return
         self.audit_text.delete('1.0', 'end')
-        deps = [d for d in package_json.collect_dependencies(self.current_project) if d['version']]
-        self._set_status(f'Querying OSV.dev for {len(deps)} packages…')
+
+        # package-lock.json があれば推移依存も含めて全件スキャン。
+        # 無ければ package.json の直接依存のみ (旧挙動)。
+        lock_deps = package_lock.read(self.current_project)
+        if lock_deps:
+            deps = lock_deps
+            source = 'package-lock.json'
+        else:
+            deps = [
+                {'name': d['name'], 'version': d['version'], 'direct': True, 'dev': d.get('dev', False)}
+                for d in package_json.collect_dependencies(self.current_project)
+                if d['version']
+            ]
+            source = 'package.json (lock 無し: 直接依存のみ)'
+
+        direct_n = sum(1 for d in deps if d.get('direct'))
+        self._set_status(f'Querying OSV.dev: {len(deps)} packages ({direct_n} direct) from {source}…')
 
         def work():
-            return osv.query_batch([{'name': d['name'], 'version': d['version']} for d in deps])
+            results = osv.query_batch([{'name': d['name'], 'version': d['version']} for d in deps])
+            return {'results': results, 'scanned': deps, 'source': source}
 
         def done(result, err):
             if err:
                 self._set_status(f'Error: {err}', color='#c00')
                 return
-            self._render_osv(result or [])
-            self._set_status(f'OSV: {len(result or [])} vulnerable packages')
+            self._render_osv(result['results'] or [], result['scanned'], result['source'])
+            self._set_status(
+                f'OSV: {len(result["results"] or [])} vulnerable / {len(result["scanned"])} scanned'
+            )
 
         self._run_bg(work, done)
 
-    def _render_osv(self, results: list[dict]) -> None:
+    def _render_osv(self, results: list[dict], scanned: list[dict], source: str) -> None:
+        direct = sum(1 for d in scanned if d.get('direct'))
+        transitive = len(scanned) - direct
+        self.audit_text.insert('end', f'スキャン元: {source}\n')
+        self.audit_text.insert(
+            'end', f'対象: 直接 {direct} 件 / 推移 {transitive} 件 (計 {len(scanned)})\n\n'
+        )
+
         if not results:
             self.audit_text.insert('end', '脆弱性は検出されませんでした。\n')
             return
+
+        info_by_nv = {(d['name'], d['version']): d for d in scanned}
         for r in results:
-            self.audit_text.insert('end', f'■ {r["name"]}@{r["version"]}\n')
+            info = info_by_nv.get((r['name'], r['version']), {})
+            tag = '直接' if info.get('direct') else '推移'
+            dev_tag = ' [dev]' if info.get('dev') else ''
+            self.audit_text.insert('end', f'■ {r["name"]}@{r["version"]} ({tag}{dev_tag})\n')
             for v in r['vulns']:
                 self.audit_text.insert('end', f'  - [{v["severity"]}] {v["id"]}: {v["summary"]}\n')
                 self.audit_text.insert('end', f'    {v["url"]}\n')
