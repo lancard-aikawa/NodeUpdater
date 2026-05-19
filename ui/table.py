@@ -30,7 +30,7 @@ class PackageTable(ttk.Frame):
         self.on_select = on_select
         self.on_render = on_render
 
-        tree = ttk.Treeview(self, columns=self.COLUMNS, show='headings', selectmode='browse')
+        tree = ttk.Treeview(self, columns=self.COLUMNS, show='headings', selectmode='extended')
         # Age 列はヘッダ短縮: status 用語 (minor/major) に揃えて Cur/Min/Maj。
         # dep: 'yes' (現行版が deprecated) / 'abnd' (package abandoned: latest も deprecated) / ''
         headings = {
@@ -160,6 +160,10 @@ class PackageTable(ttk.Frame):
         if not sel:
             return None
         return self._row_data.get(sel[0])
+
+    def get_selected_all(self) -> list[dict]:
+        """選択中の全行を画面順で返す。"""
+        return [self._row_data[iid] for iid in self.tree.selection() if iid in self._row_data]
 
     def _on_select(self, _event) -> None:
         if not self.on_select:

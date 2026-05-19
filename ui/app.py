@@ -593,41 +593,71 @@ class App(tk.Tk):
         webbrowser.open(f'https://www.npmjs.com/package/{pkg["name"]}')
 
     def _install_selected(self, scope: str, target: str) -> None:
-        """scope: 'project' | 'global'   target: 'minor' | 'major'"""
-        pkg = self._selected_pkg(scope)
-        if not pkg:
-            messagebox.showinfo('NodeUpdater', 'Select a package first.')
+        """scope: 'project' | 'global'   target: 'minor' | 'major'
+
+        複数選択時は 1 つの `npm install` コマンドにまとめて起動する。
+        対象更新が無いパッケージはスキップして確認ダイアログで通知。
+        """
+        table = self.project_table if scope == 'project' else self.global_table
+        selected = table.get_selected_all()
+        if not selected:
+            messagebox.showinfo('NodeUpdater', 'Select one or more packages first.')
             return
         if scope == 'project' and not self.current_project:
             messagebox.showinfo('NodeUpdater', 'Choose a project first.')
             return
 
-        version = pkg.get('latestMinor') if target == 'minor' else pkg.get('latestMajor')
-        if not version:
+        key = 'latestMinor' if target == 'minor' else 'latestMajor'
+        targets, skipped = [], []
+        for p in selected:
+            v = p.get(key)
+            if v:
+                targets.append((p['name'], v))
+            else:
+                skipped.append(p['name'])
+
+        if not targets:
             label = 'Minor (same major)' if target == 'minor' else 'Major up'
-            messagebox.showinfo('NodeUpdater', f'{pkg["name"]} に {label} の更新候補はありません。')
+            messagebox.showinfo(
+                'NodeUpdater', f'選択された {len(selected)} 件すべてに {label} の更新候補はありません。'
+            )
             return
 
         is_global = (scope == 'global')
         cwd = None if is_global else str(self.current_project)
         g = '-g ' if is_global else ''
-        cmd = f'npm install {g}{pkg["name"]}@{version}'
+        spec_str = ' '.join(f'{n}@{v}' for n, v in targets)
+        cmd = f'npm install {g}{spec_str}'
         location = '(global)' if is_global else f'(in {self.current_project})'
 
-        if not messagebox.askyesno(
-            'NodeUpdater',
-            f'新しいコマンドプロンプトで以下を実行します:\n\n  {cmd}\n\n'
+        # 確認ダイアログ: 件数が多い場合はコマンドを丸めて表示
+        if len(targets) > 6:
+            shown = '\n'.join(f'  - {n}@{v}' for n, v in targets[:6])
+            shown += f'\n  ... ほか {len(targets) - 6} 件'
+            preview = f'npm install {g}\n{shown}'
+        else:
+            preview = cmd
+
+        msg = (
+            f'新しいコマンドプロンプトで以下を実行します ({len(targets)} packages):\n\n'
+            f'{preview}\n\n'
             f'実行場所: {location}\n'
-            f'完了後はプロンプトに結果が残るので確認できます。\n'
-            f'更新後の状態を反映するには Refresh を押してください。\n\n'
-            f'続行しますか？'
-        ):
+        )
+        if skipped:
+            shown_skip = ', '.join(skipped[:5])
+            if len(skipped) > 5:
+                shown_skip += f' ほか {len(skipped) - 5} 件'
+            label = 'Minor' if target == 'minor' else 'Major'
+            msg += f'\nスキップ ({label} 候補なし): {shown_skip}\n'
+        msg += '\n完了後はプロンプトに結果が残ります。更新後は Refresh を押してください。\n\n続行しますか？'
+
+        if not messagebox.askyesno('NodeUpdater', msg):
             return
         try:
-            npm_global.open_install_prompt(
-                pkg['name'], version=version, cwd=cwd, global_install=is_global,
+            npm_global.open_command_prompt(cmd, cwd=cwd)
+            self._set_status(
+                f'Opened prompt: install {len(targets)} package(s) ({"global" if is_global else "project"})'
             )
-            self._set_status(f'Opened prompt: {cmd}  (Refresh after completion)')
         except OSError as e:
             messagebox.showerror('NodeUpdater', f'プロンプトの起動に失敗しました\n\n{e}')
 
