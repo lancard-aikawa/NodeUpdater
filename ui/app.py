@@ -290,7 +290,12 @@ class App(tk.Tk):
         self._set_status(f'Querying OSV.dev: {len(deps)} packages ({direct_n} direct) from {source}…')
 
         def work():
-            results = osv.query_batch([{'name': d['name'], 'version': d['version']} for d in deps])
+            def on_prog(done_count, total):
+                self._post_progress(done_count, total, 'OSV scan')
+            results = osv.query_batch(
+                [{'name': d['name'], 'version': d['version']} for d in deps],
+                on_progress=on_prog,
+            )
             # パッケージは含まれる最も深刻な vuln の severity 順に並べる
             results.sort(key=lambda r: min(
                 (osv.SEVERITY_ORDER.get(v['severity'], 99) for v in r['vulns']), default=99

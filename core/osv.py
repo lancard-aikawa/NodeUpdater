@@ -9,6 +9,8 @@ from typing import Callable
 _UA = 'NodeUpdater/0.1'
 _API = 'https://api.osv.dev/v1/querybatch'
 _TIMEOUT = 25
+# OSV.dev /v1/querybatch は 1000 件/リクエストが上限。安全側に分割する。
+_BATCH_SIZE = 500
 
 # 表示・ソート用の重要度順位。値が小さいほど深刻。
 SEVERITY_ORDER: dict[str, int] = {
@@ -84,33 +86,36 @@ def query_batch(
 ) -> list[dict]:
     """packages: [{name, version}, ...] → [{name, version, vulns: [...]}, ...]
 
-    vulns の各要素は {id, summary, severity, url} の最小構造。
+    OSV.dev /v1/querybatch の上限 (1000 件) を避けるため内部で _BATCH_SIZE 件
+    ごとに分割して POST する。on_progress(done, total) は各チャンク終了時に
+    呼ばれる (UI から進捗表示するためのフック)。
     脆弱性が見つからなかったパッケージは結果に含めない。
     """
     valid = [p for p in packages if p.get('version')]
     if not valid:
         return []
 
-    queries = [
-        {'package': {'name': p['name'], 'ecosystem': 'npm'}, 'version': p['version']}
-        for p in valid
-    ]
-    results = _post_batch(queries)
-
-    out = []
-    for pkg, res in zip(valid, results):
-        vulns_in = (res or {}).get('vulns') or []
-        if not vulns_in:
-            continue
-        vulns_out = [{
-            'id': v.get('id'),
-            'summary': v.get('summary') or v.get('details', '')[:140],
-            'severity': _severity_label(v),
-            'url': _primary_url(v) or f'https://osv.dev/vulnerability/{v.get("id")}',
-        } for v in vulns_in]
-        # パッケージ内では severity の重い順に並べる
-        vulns_out.sort(key=lambda x: SEVERITY_ORDER.get(x['severity'], 99))
-        out.append({'name': pkg['name'], 'version': pkg['version'], 'vulns': vulns_out})
-    if on_progress is not None:
-        on_progress(len(valid), len(valid))
+    total = len(valid)
+    out: list[dict] = []
+    for start in range(0, total, _BATCH_SIZE):
+        chunk = valid[start:start + _BATCH_SIZE]
+        queries = [
+            {'package': {'name': p['name'], 'ecosystem': 'npm'}, 'version': p['version']}
+            for p in chunk
+        ]
+        results = _post_batch(queries)
+        for pkg, res in zip(chunk, results):
+            vulns_in = (res or {}).get('vulns') or []
+            if not vulns_in:
+                continue
+            vulns_out = [{
+                'id': v.get('id'),
+                'summary': v.get('summary') or v.get('details', '')[:140],
+                'severity': _severity_label(v),
+                'url': _primary_url(v) or f'https://osv.dev/vulnerability/{v.get("id")}',
+            } for v in vulns_in]
+            vulns_out.sort(key=lambda x: SEVERITY_ORDER.get(x['severity'], 99))
+            out.append({'name': pkg['name'], 'version': pkg['version'], 'vulns': vulns_out})
+        if on_progress is not None:
+            on_progress(min(start + _BATCH_SIZE, total), total)
     return out
