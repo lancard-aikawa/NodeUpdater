@@ -10,6 +10,7 @@ from tkinter import filedialog, messagebox, ttk
 from core import (
     audit_export,
     bun_lock,
+    bundlephobia,
     cache,
     npm_global,
     npm_registry,
@@ -395,7 +396,22 @@ class App(tk.Tk):
                 on_progress=on_prog,
                 cooldown_days=cooldown,
             )
-            return _build_package_list(deps, infos)
+            pkg_list = _build_package_list(deps, infos)
+
+            # bundlephobia から bundle size を後付け (version 単位で永続キャッシュ)
+            def on_size_prog(done_count, total):
+                if total:
+                    self._post_progress(done_count, total, 'Fetching bundle sizes')
+            sizes = bundlephobia.fetch_many_cached(
+                [(p['name'], p.get('current')) for p in pkg_list],
+                on_progress=on_size_prog,
+            )
+            for p in pkg_list:
+                s = sizes.get(p['name'])
+                if s:
+                    p['size'] = s.get('size')
+                    p['gzip'] = s.get('gzip')
+            return pkg_list
 
         def done(result, err):
             if err:

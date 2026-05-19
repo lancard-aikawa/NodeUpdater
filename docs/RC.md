@@ -45,10 +45,12 @@ NodeUpdater の今後追加していく可能性のある機能候補をまと�
 - **実装規模**: 小。`core/npm_registry.py` の `fetch_many` が既に registry にアクセスしているので、取得フィールド追加のみ。
 - **実装**: `dep` 列 (`yes` / `abnd` / 空) と `License` 列を追加。選択行が deprecated ならステータスバーに registry の deprecation message を表示。
 
-#### 2-C. package size 表示
+#### 2-C. package size 表示 [実装済み]
 - **概要**: bundlephobia API で minified / install size を取得して列表示。
 - **狙い**: フロントエンド向けに bundle 影響を把握。
 - **実装規模**: 小〜中。bundlephobia API へのアクセス追加。失敗時の挙動 (静かに空表示) を含む。
+- **実装**: `core/bundlephobia.py` を追加し `/api/size` を叩く。version は immutable なので `name@version` 単位で 1 ファイルに永続キャッシュ (TTL 1 年)。並列度はサーバ負荷を考慮して 4 に制限。`refresh_project` の登録メタ取得後に bundle size を後付けで取得し、テーブルに `Bundle (gz)` 列で表示 (KB / MB 自動整形)。workspace: / file: / git+ などローカル参照と取得失敗 (404 / 429 / TimeoutError) は静かに空。
+- **未対応**: minified サイズ (gzip 前) の列表示 (内部データには保持)、`Bundle (gz)` でソート、install size (node_modules 上のディスク使用量)。
 
 ### 3. スコープ拡張
 

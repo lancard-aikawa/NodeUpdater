@@ -23,7 +23,7 @@ class PackageTable(ttk.Frame):
     """
 
     COLUMNS = ('name', 'current', 'age_cur', 'minor', 'age_min', 'major', 'age_maj',
-               'status', 'dev', 'prov', 'dep', 'license')
+               'status', 'dev', 'prov', 'dep', 'license', 'gz')
 
     def __init__(self, master, on_select=None, on_render=None):
         super().__init__(master)
@@ -46,8 +46,9 @@ class PackageTable(ttk.Frame):
             'prov':    ('prov',              50),
             'dep':     ('dep',               50),
             'license': ('License',           90),
+            'gz':      ('Bundle (gz)',       80),
         }
-        right_aligned = {'age_cur', 'age_min', 'age_maj'}
+        right_aligned = {'age_cur', 'age_min', 'age_maj', 'gz'}
         centered = {'dev', 'prov', 'status', 'dep'}
         for col, (label, width) in headings.items():
             tree.heading(col, text=label)
@@ -84,6 +85,18 @@ class PackageTable(ttk.Frame):
         if days is None or days == '':
             return ''
         return f'{days}d'
+
+    @staticmethod
+    def _size_text(b) -> str:
+        if not isinstance(b, (int, float)):
+            return ''
+        if b < 1024:
+            return f'{int(b)} B'
+        if b < 100 * 1024:
+            return f'{b / 1024:.1f} KB'
+        if b < 1024 * 1024:
+            return f'{b / 1024:.0f} KB'
+        return f'{b / 1024 / 1024:.1f} MB'
 
     @staticmethod
     def _dep_text(p: dict) -> str:
@@ -146,6 +159,7 @@ class PackageTable(ttk.Frame):
                 'yes' if p.get('provenance') else ('no' if p.get('provenance') is False else ''),
                 self._dep_text(p),
                 p.get('license') or '',
+                self._size_text(p.get('gzip')),
             ), tags=(p.get('status', 'unknown'),))
             self._row_data[iid] = p
         if self.on_render:
