@@ -17,11 +17,13 @@ from core import (
     osv,
     package_json,
     package_lock,
+    pkg_manager,
     semver,
     state,
 )
 
 from .changelog_dialog import ChangelogDialog
+from .install_dialog import InstallDialog
 from .settings_dialog import SettingsDialog
 from .table import PackageTable
 
@@ -937,38 +939,30 @@ class App(tk.Tk):
 
         is_global = (scope == 'global')
         cwd = None if is_global else str(self.current_project)
-        g = '-g ' if is_global else ''
-        spec_str = ' '.join(f'{n}@{v}' for n, v in targets)
-        cmd = f'npm install {g}{spec_str}'
-        location = '(global)' if is_global else f'(in {self.current_project})'
+        specs = [f'{n}@{v}' for n, v in targets]
+        # global は常に npm、project は lockfile から PM を検出
+        pm = 'npm' if is_global else pkg_manager.detect(self.current_project)
+        target_label = 'Install Minor Up' if target == 'minor' else 'Install Major Up'
 
-        # 確認ダイアログ: 件数が多い場合はコマンドを丸めて表示
-        if len(targets) > 6:
-            shown = '\n'.join(f'  - {n}@{v}' for n, v in targets[:6])
-            shown += f'\n  ... ほか {len(targets) - 6} 件'
-            preview = f'npm install {g}\n{shown}'
-        else:
-            preview = cmd
-
-        msg = (
-            f'新しいコマンドプロンプトで以下を実行します ({len(targets)} packages):\n\n'
-            f'{preview}\n\n'
-            f'実行場所: {location}\n'
+        dialog = InstallDialog(
+            self,
+            title_label=target_label,
+            specs=specs,
+            skipped=skipped,
+            cwd=cwd,
+            global_install=is_global,
+            pm=pm,
         )
-        if skipped:
-            shown_skip = ', '.join(skipped[:5])
-            if len(skipped) > 5:
-                shown_skip += f' ほか {len(skipped) - 5} 件'
-            label = 'Minor' if target == 'minor' else 'Major'
-            msg += f'\nスキップ ({label} 候補なし): {shown_skip}\n'
-        msg += '\n完了後はプロンプトに結果が残ります。更新後は Refresh を押してください。\n\n続行しますか？'
-
-        if not messagebox.askyesno('NodeUpdater', msg):
+        self.wait_window(dialog)
+        if dialog.result != 'install':
             return
+
+        cmd = pkg_manager.install_command(pm, specs, global_install=is_global)
         try:
             npm_global.open_command_prompt(cmd, cwd=cwd)
             self._set_status(
-                f'Opened prompt: install {len(targets)} package(s) ({"global" if is_global else "project"})'
+                f'Opened prompt [{pm}]: install {len(specs)} package(s) '
+                f'({"global" if is_global else "project"})'
             )
         except OSError as e:
             messagebox.showerror('NodeUpdater', f'プロンプトの起動に失敗しました\n\n{e}')
