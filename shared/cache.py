@@ -1,7 +1,8 @@
 """キャッシュ保存先の解決と TTL 付き JSON read/write。
 
 exe 配置フォルダ下 `cache/` を第一候補、書き込み不可なら
-`%LOCALAPPDATA%\\NodeUpdater\\cache\\` にフォールバック。
+`%LOCALAPPDATA%\\PkgUpdater\\cache\\` にフォールバック。
+NodeUpdater / PypkgUpdater いずれも同じディレクトリを共有する (キーで分離)。
 """
 from __future__ import annotations
 
@@ -23,8 +24,8 @@ def _exe_dir() -> Path:
 def root_dir() -> Path:
     """書き込み可能なルートディレクトリ。
 
-    第一候補: exe 配置フォルダ（dev では NodeUpdater/）
-    フォールバック: %LOCALAPPDATA%\\NodeUpdater\\
+    第一候補: exe 配置フォルダ（dev ではリポジトリルート）
+    フォールバック: %LOCALAPPDATA%\\PkgUpdater\\
 
     cache や state ファイルの親として共通利用する。
     """
@@ -36,7 +37,7 @@ def root_dir() -> Path:
         probe.unlink()
         return primary
     except (OSError, PermissionError):
-        fallback = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))) / 'NodeUpdater'
+        fallback = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))) / 'PkgUpdater'
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
 

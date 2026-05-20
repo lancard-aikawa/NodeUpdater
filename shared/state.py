@@ -7,16 +7,28 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Callable
 
 from . import cache
+
+# state.json は両 GUI (NodeUpdater / PypkgUpdater) で共有する。
+# recent_projects は両方で同じリストを書き込むため、表示時には predicate で
+# 「自分の ecosystem の project だけ」に絞る。保存形式は path 文字列のまま
+# 変えない (path だけ見れば node/py どちらでも開けるので将来も拡張しやすい)。
+ProjectFilter = Callable[[str], bool]
 
 _STATE_FILE = 'state.json'
 _MAX_RECENT = 10
 _DEFAULT_COOLDOWN_DAYS = 7  # 供給チェーン攻撃対策バッファ (uv/pip のグローバル方針と整合)
 
-DEFAULT_REGISTRY_URL = 'https://registry.npmjs.org'
+DEFAULT_NPM_REGISTRY_URL = 'https://registry.npmjs.org'
+DEFAULT_PYPI_INDEX_URL = 'https://pypi.org/pypi'
 DEFAULT_OSV_API_URL = 'https://api.osv.dev/v1/querybatch'
 DEFAULT_PARALLEL_REQUESTS = 8
+
+# 旧名互換: 既存コードからは get_registry_url() で参照されていたので残しておく。
+# 新規コードは get_npm_registry_url() を使う。
+DEFAULT_REGISTRY_URL = DEFAULT_NPM_REGISTRY_URL
 
 
 def _file() -> Path:
@@ -37,32 +49,46 @@ def _save_all(data: dict) -> None:
         pass  # 書けないなら諦める（次回履歴が消えるだけ）
 
 
-def load_recent_projects() -> list[str]:
+def load_recent_projects(predicate: ProjectFilter | None = None) -> list[str]:
+    """recent_projects を返す。predicate を渡すと表示時にさらに絞り込む。
+
+    保存リスト自体は ecosystem 中立 (path のみ)。各 App が自分のマーカー
+    (package.json / pyproject.toml など) を predicate に渡して表示を絞る。
+    """
     items = _load_all().get('recent_projects') or []
-    # 存在しなくなったパスは除外しておく
-    return [p for p in items if isinstance(p, str) and Path(p).is_dir()]
+    valid = [p for p in items if isinstance(p, str) and Path(p).is_dir()]
+    if predicate:
+        return [p for p in valid if predicate(p)]
+    return valid
 
 
-def add_recent_project(path: str) -> list[str]:
-    """先頭に追加して重複除去、存在しないパスを掃除、上限まで切り詰める。"""
+def add_recent_project(path: str, predicate: ProjectFilter | None = None) -> list[str]:
+    """先頭に追加して重複除去、存在しないパスを掃除、上限まで切り詰める。
+
+    保存は predicate 非適用 (もう一方の GUI から開かれた project も残す)。
+    返り値だけ predicate でフィルタする (combo に流す表示用)。
+    """
     path = str(Path(path).resolve())
     data = _load_all()
     items = data.get('recent_projects') or []
-    # 既存リストから当該パスと存在しないパスを除外
     items = [p for p in items if p != path and isinstance(p, str) and Path(p).is_dir()]
     items.insert(0, path)
     items = items[:_MAX_RECENT]
     data['recent_projects'] = items
     _save_all(data)
+    if predicate:
+        return [p for p in items if predicate(p)]
     return items
 
 
-def remove_recent_project(path: str) -> list[str]:
+def remove_recent_project(path: str, predicate: ProjectFilter | None = None) -> list[str]:
     path = str(Path(path).resolve())
     data = _load_all()
     items = [p for p in (data.get('recent_projects') or []) if p != path]
     data['recent_projects'] = items
     _save_all(data)
+    if predicate:
+        return [p for p in items if predicate(p)]
     return items
 
 
@@ -84,8 +110,19 @@ def set_cooldown_days(days: int) -> None:
     _save_all(data)
 
 
+def get_npm_registry_url() -> str:
+    # state.json のキーは 'registry_url' (NodeUpdater 単独時代から続く名)。
+    # 新規ツールでも同じ key を共有する (npm 専用設定として残す)。
+    return (_load_all().get('registry_url') or '').strip() or DEFAULT_NPM_REGISTRY_URL
+
+
+def get_pypi_index_url() -> str:
+    return (_load_all().get('pypi_index_url') or '').strip() or DEFAULT_PYPI_INDEX_URL
+
+
+# 旧名互換 (NodeUpdater 単独時代の呼び出し名)。新規コードは get_npm_registry_url を使う。
 def get_registry_url() -> str:
-    return (_load_all().get('registry_url') or '').strip() or DEFAULT_REGISTRY_URL
+    return get_npm_registry_url()
 
 
 def get_proxy_url() -> str:

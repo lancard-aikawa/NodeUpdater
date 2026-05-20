@@ -6,7 +6,7 @@ import tkinter as tk
 import webbrowser
 from tkinter import ttk
 
-from core import github_releases
+from shared import github_releases
 
 
 class ChangelogDialog(tk.Toplevel):
@@ -144,7 +144,7 @@ class ChangelogDialog(tk.Toplevel):
         """current < v <= latest を満たす version 集合を粗く抽出 (semver なし簡易比較)。"""
         if not cv or not lv:
             return set()
-        from core import semver
+        from node.core import semver
         cur = semver.parse(cv)
         lat = semver.parse(lv)
         if not cur or not lat:

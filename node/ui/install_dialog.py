@@ -10,7 +10,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
-from core import pkg_manager
+from node.core import pkg_manager
 
 
 class InstallDialog(tk.Toplevel):

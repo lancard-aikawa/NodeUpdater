@@ -10,7 +10,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from ui.app import App
+# スクリプト直起動 (py node/main.py) と PyInstaller 実行両方で
+# `node` / `shared` パッケージを解決できるようにリポジトリルートを sys.path に追加。
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from node.ui.app import App
 
 
 def _resolve_project(argv: list[str]) -> Path | None:

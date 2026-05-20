@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import cache, state
+from shared import cache, state
 
 _UA = 'NodeUpdater/0.1'
 _BASE = 'https://bundlephobia.com/api/size'

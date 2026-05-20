@@ -13,7 +13,7 @@ import urllib.request
 
 from . import cache, state
 
-_UA = 'NodeUpdater/0.1'
+_UA = 'PkgUpdater/0.1'
 _API = 'https://api.github.com'
 _TIMEOUT = 15
 _CACHE_TTL = 24 * 60 * 60  # 24h

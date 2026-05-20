@@ -1,23 +1,24 @@
 @echo off
-REM PyInstaller で NodeUpdater.exe を単一ファイルにビルド。
+REM PkgUpdater 一括ビルド: NodeUpdater.exe と PypkgUpdater.exe を順に生成。
 REM 事前に: py -m pip install --user pyinstaller
 
 setlocal
 cd /d "%~dp0"
 
-py -m PyInstaller ^
-  --onefile ^
-  --noconsole ^
-  --name NodeUpdater ^
-  --collect-submodules tkinter ^
-  main.py
-
+call node\build.cmd
 if errorlevel 1 (
   echo.
-  echo Build failed.
+  echo Node build failed.
+  exit /b 1
+)
+
+call py\build.cmd
+if errorlevel 1 (
+  echo.
+  echo Py build failed.
   exit /b 1
 )
 
 echo.
-echo Output: dist\NodeUpdater.exe
+echo Both built: dist\NodeUpdater.exe + dist\PypkgUpdater.exe
 endlocal

@@ -4,7 +4,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
-from core import state
+from shared import state
 
 
 class SettingsDialog(tk.Toplevel):

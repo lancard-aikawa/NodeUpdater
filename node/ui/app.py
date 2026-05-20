@@ -7,20 +7,23 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from core import (
+from shared import (
     audit_export,
-    bun_lock,
-    bundlephobia,
     cache,
     history,
+    osv,
+    state,
+    ui_tabs,
+)
+from node.core import (
+    bun_lock,
+    bundlephobia,
     npm_global,
     npm_registry,
-    osv,
     package_json,
     package_lock,
     pkg_manager,
     semver,
-    state,
 )
 
 from .changelog_dialog import ChangelogDialog
@@ -67,7 +70,7 @@ class App(tk.Tk):
         ttk.Label(top, text='Project:').pack(side='left')
         # 履歴付きドロップダウン: 過去に開いたプロジェクトをすぐ選び直せる
         self.project_combo = ttk.Combobox(top, state='readonly', width=70)
-        self.project_combo['values'] = state.load_recent_projects()
+        self.project_combo['values'] = state.load_recent_projects(predicate=_is_node_project)
         self.project_combo.pack(side='left', padx=(4, 8))
         self.project_combo.bind('<<ComboboxSelected>>', self._on_recent_selected)
         self.choose_btn = ttk.Button(top, text='Choose…', command=self.choose_project)
@@ -99,7 +102,7 @@ class App(tk.Tk):
         # 操作ボタンの参照（busy 中は disable）
         self._action_buttons: list[ttk.Button] = [self.choose_btn]
 
-        self.notebook = ttk.Notebook(self)
+        self.notebook = ttk.Notebook(self, style=ui_tabs.ensure_notebook_style())
         self.notebook.pack(fill='both', expand=True, padx=8, pady=(0, 8))
 
         # Global tab (左端: argv なし起動時のデフォルト)
@@ -415,7 +418,7 @@ class App(tk.Tk):
 
     def _set_recent_and_select(self, path_str: str) -> None:
         """履歴に追加してドロップダウンを再構築、先頭を選択状態にする。"""
-        items = state.add_recent_project(path_str)
+        items = state.add_recent_project(path_str, predicate=_is_node_project)
         self.project_combo['values'] = items
         # 正規化済みの先頭値を反映
         self.project_combo.set(items[0] if items else path_str)
@@ -428,7 +431,9 @@ class App(tk.Tk):
         if not path.is_dir():
             messagebox.showerror('NodeUpdater', f'フォルダが存在しません:\n{chosen}')
             # 履歴から消す
-            self.project_combo['values'] = state.remove_recent_project(chosen)
+            self.project_combo['values'] = state.remove_recent_project(
+                chosen, predicate=_is_node_project,
+            )
             self.project_combo.set('')
             return
         # 同じプロジェクトを再選択した場合もリフレッシュは走らせる（ユーザー意図優先）
@@ -990,6 +995,15 @@ class App(tk.Tk):
                 )
         except OSError as e:
             messagebox.showerror('NodeUpdater', f'プロンプトの起動に失敗しました\n\n{e}')
+
+
+def _is_node_project(path: str) -> bool:
+    """Node プロジェクトの判定: package.json がルートにあれば対象。
+
+    state.json は両 GUI で共有しているため、recent_projects ドロップダウンは
+    自分の ecosystem のものだけに絞り込んでから表示する。
+    """
+    return (Path(path) / 'package.json').is_file()
 
 
 def _build_package_list(deps: list[dict], infos: dict[str, dict]) -> list[dict]:

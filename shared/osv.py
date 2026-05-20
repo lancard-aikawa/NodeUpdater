@@ -1,4 +1,8 @@
-"""OSV.dev API クライアント (npm ecosystem)。"""
+"""OSV.dev API クライアント。
+
+ecosystem は呼び出し側から指定する: 'npm' (Node), 'PyPI' (Python) など。
+OSV.dev の ecosystem ID は https://ossf.github.io/osv-schema/ の表参照。
+"""
 from __future__ import annotations
 
 import json
@@ -8,7 +12,7 @@ from typing import Callable
 
 from . import state
 
-_UA = 'NodeUpdater/0.1'
+_UA = 'PkgUpdater/0.1'
 _TIMEOUT = 25
 # OSV.dev /v1/querybatch は 1000 件/リクエストが上限。安全側に分割する。
 _BATCH_SIZE = 500
@@ -92,6 +96,7 @@ def _post_batch(queries: list[dict]) -> list[dict]:
 def query_batch(
     packages: list[dict],
     on_progress: Callable[[int, int], None] | None = None,
+    ecosystem: str = 'npm',
 ) -> list[dict]:
     """packages: [{name, version}, ...] → [{name, version, vulns: [...]}, ...]
 
@@ -99,6 +104,7 @@ def query_batch(
     ごとに分割して POST する。on_progress(done, total) は各チャンク終了時に
     呼ばれる (UI から進捗表示するためのフック)。
     脆弱性が見つからなかったパッケージは結果に含めない。
+    ecosystem は OSV.dev の ecosystem ID ('npm' / 'PyPI' / 'Go' …)。
     """
     valid = [p for p in packages if p.get('version')]
     if not valid:
@@ -109,7 +115,7 @@ def query_batch(
     for start in range(0, total, _BATCH_SIZE):
         chunk = valid[start:start + _BATCH_SIZE]
         queries = [
-            {'package': {'name': p['name'], 'ecosystem': 'npm'}, 'version': p['version']}
+            {'package': {'name': p['name'], 'ecosystem': ecosystem}, 'version': p['version']}
             for p in chunk
         ]
         results = _post_batch(queries)

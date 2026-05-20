@@ -4,7 +4,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from core import history
+from shared import history
 
 
 class HistoryDialog(tk.Toplevel):

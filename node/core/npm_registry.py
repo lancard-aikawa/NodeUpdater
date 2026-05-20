@@ -8,7 +8,9 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
-from . import semver, state
+from shared import state
+
+from . import semver
 
 _UA = 'NodeUpdater/0.1'
 _TIMEOUT = 10
