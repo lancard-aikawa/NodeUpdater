@@ -566,7 +566,10 @@ class App(tk.Tk):
             if err:
                 self._set_status(f'Error: {err}', color='#c00')
                 return
-            cache.save(cache_key, result)
+            # error / 空応答はキャッシュしない (PATH 問題などで一時的に取れなかった時に
+            # その失敗が TTL 中ずっと張り付くのを避ける)。
+            if not result.get('error') and result.get('packages'):
+                cache.save(cache_key, result)
             self._render_global(result, from_cache=False)
 
         self._run_bg(work, done)
