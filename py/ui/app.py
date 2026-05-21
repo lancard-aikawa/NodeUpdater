@@ -14,6 +14,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from shared import cache, history, osv, state, ui_tabs, ui_tooltip
 from shared.install_dialog import InstallDialog
+from shared.safe_install_dialog import SafeInstallDialog
 
 from py.core import (
     pep440, pip_global, pkg_manager, pypi, pyproject, requirements_writer,
@@ -49,15 +50,16 @@ class App(tk.Tk):
     def _build_layout(self) -> None:
         top = ttk.Frame(self, padding=(8, 6))
         top.pack(fill='x')
-        ttk.Label(top, text='Project:').pack(side='left')
+        ttk.Label(top, text='プロジェクト:').pack(side='left')
         self.project_combo = ttk.Combobox(top, state='readonly', width=70)
         self.project_combo['values'] = state.load_recent_projects(predicate=_is_py_project)
         self.project_combo.pack(side='left', padx=(4, 8))
         self.project_combo.bind('<<ComboboxSelected>>', self._on_recent_selected)
-        self.choose_btn = ttk.Button(top, text='Choose…', command=self.choose_project)
+        self.choose_btn = ttk.Button(top, text='フォルダ選択…', command=self.choose_project)
+        ui_tooltip.attach(self.choose_btn, 'Choose…: pyproject.toml か requirements.txt があるフォルダを開く')
         self.choose_btn.pack(side='left')
 
-        ttk.Label(top, text='  Cooldown:').pack(side='left', padx=(12, 2))
+        ttk.Label(top, text='  クールダウン:').pack(side='left', padx=(12, 2))
         self.cooldown_var = tk.IntVar(value=state.get_cooldown_days())
         self.cooldown_spin = ttk.Spinbox(
             top, from_=0, to=90, width=4,
@@ -66,8 +68,14 @@ class App(tk.Tk):
         )
         self.cooldown_spin.pack(side='left')
         ttk.Label(top, text='日').pack(side='left', padx=(2, 0))
+        ui_tooltip.attach(
+            self.cooldown_spin,
+            'Cooldown: 公開から N 日経っていない版を最新候補から除外 '
+            '(供給チェーン攻撃対策のバッファ)。',
+        )
 
-        self.debug_log_btn = ttk.Button(top, text='Debug Log…', command=self._open_debug_log)
+        self.debug_log_btn = ttk.Button(top, text='デバッグログ…', command=self._open_debug_log)
+        ui_tooltip.attach(self.debug_log_btn, 'Debug Log…: subprocess 失敗等の永続記録を閲覧')
         self.debug_log_btn.pack(side='left', padx=(12, 0))
 
         self._busy = False
@@ -92,19 +100,31 @@ class App(tk.Tk):
         self.notebook.add(self.tab_global, text='Global (pip list)')
         gbar = ttk.Frame(self.tab_global, padding=(4, 4))
         gbar.pack(fill='x')
-        gb1 = ttk.Button(gbar, text='Refresh', command=self.refresh_global)
+        gb1 = ttk.Button(gbar, text='再取得', command=self.refresh_global)
+        ui_tooltip.attach(gb1, 'Refresh: グローバル (現在の python) パッケージ一覧を再取得')
         gb1.pack(side='left')
-        gb2 = ttk.Button(gbar, text='Force Refresh',
+        gb2 = ttk.Button(gbar, text='強制再取得',
                          command=lambda: self.refresh_global(force=True))
+        ui_tooltip.attach(gb2, 'Force Refresh: cache を無視して再取得')
         gb2.pack(side='left', padx=(4, 0))
-        gb_min = ttk.Button(gbar, text='Install Minor Up…',
+        gb_min = ttk.Button(gbar, text='Minor版に更新…',
                             command=lambda: self._install_selected('global', 'minor'))
+        ui_tooltip.attach(gb_min, 'Install Minor Up: 同 major 内の最新版に更新 (spec 無視)')
         gb_min.pack(side='left', padx=(12, 0))
-        gb_maj = ttk.Button(gbar, text='Install Major Up…',
+        gb_maj = ttk.Button(gbar, text='Major版に更新…',
                             command=lambda: self._install_selected('global', 'major'))
+        ui_tooltip.attach(gb_maj, 'Install Major Up: 次 major へ更新 (Breaking Change の可能性)')
         gb_maj.pack(side='left', padx=(4, 0))
-        gb3 = ttk.Button(gbar, text='Open on PyPI',
+        gb_safe = ttk.Button(gbar, text='安全インストール…',
+                             command=self._safe_install_global)
+        ui_tooltip.attach(
+            gb_safe,
+            'Safe Install…: 未インストールパッケージを cooldown 適用後の版で個別に追加',
+        )
+        gb_safe.pack(side='left', padx=(4, 0))
+        gb3 = ttk.Button(gbar, text='PyPIで開く',
                          command=lambda: self._open_selected_pypi('global'))
+        ui_tooltip.attach(gb3, 'Open on PyPI: 選択行のパッケージページをブラウザで開く')
         gb3.pack(side='left', padx=(12, 0))
         self.global_table = PackageTable(self.tab_global)
         # Global は spec が無いため Wanted 列は常に空。既定は Latest にしておく。
@@ -113,25 +133,39 @@ class App(tk.Tk):
 
         # Project tab
         self.tab_project = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_project, text='Project')
+        self.notebook.add(self.tab_project, text='プロジェクト')
         pbar = ttk.Frame(self.tab_project, padding=(4, 4))
         pbar.pack(fill='x')
-        pb1 = ttk.Button(pbar, text='Refresh', command=self.refresh_project)
+        pb1 = ttk.Button(pbar, text='再取得', command=self.refresh_project)
+        ui_tooltip.attach(pb1, 'Refresh: 依存一覧を再取得 (cache 利用)')
         pb1.pack(side='left')
-        pb2 = ttk.Button(pbar, text='Force Refresh',
+        pb2 = ttk.Button(pbar, text='強制再取得',
                          command=lambda: self.refresh_project(force=True))
+        ui_tooltip.attach(pb2, 'Force Refresh: cache を無視して再取得')
         pb2.pack(side='left', padx=(4, 0))
-        pb_wnt = ttk.Button(pbar, text='Install Wanted…',
+        pb_wnt = ttk.Button(pbar, text='Wanted版で更新…',
                             command=lambda: self._install_selected('project', 'wanted'))
+        ui_tooltip.attach(pb_wnt, 'Install Wanted: spec (== ~= >= 等) が許す最高版へ更新')
         pb_wnt.pack(side='left', padx=(12, 0))
-        pb_min = ttk.Button(pbar, text='Install Minor Up…',
+        pb_min = ttk.Button(pbar, text='Minor版に更新…',
                             command=lambda: self._install_selected('project', 'minor'))
+        ui_tooltip.attach(pb_min, 'Install Minor Up: 同 major 内の最新版に更新 (spec 無視)')
         pb_min.pack(side='left', padx=(4, 0))
-        pb_maj = ttk.Button(pbar, text='Install Major Up…',
+        pb_maj = ttk.Button(pbar, text='Major版に更新…',
                             command=lambda: self._install_selected('project', 'major'))
+        ui_tooltip.attach(pb_maj, 'Install Major Up: 次 major へ更新 (Breaking Change の可能性)')
         pb_maj.pack(side='left', padx=(4, 0))
-        pb3 = ttk.Button(pbar, text='Open on PyPI',
+        pb_safe = ttk.Button(pbar, text='安全インストール…',
+                             command=self._safe_install_project)
+        ui_tooltip.attach(
+            pb_safe,
+            'Safe Install…: 未導入のパッケージを cooldown 適用後の版で個別に追加 '
+            '(uv add / poetry add / pip install -U)',
+        )
+        pb_safe.pack(side='left', padx=(4, 0))
+        pb3 = ttk.Button(pbar, text='PyPIで開く',
                          command=lambda: self._open_selected_pypi('project'))
+        ui_tooltip.attach(pb3, 'Open on PyPI: 選択行のパッケージページをブラウザで開く')
         pb3.pack(side='left', padx=(12, 0))
         self.project_table = PackageTable(self.tab_project)
         self._make_filter_bar(self.tab_project, self.project_table)
@@ -139,32 +173,36 @@ class App(tk.Tk):
 
         # Audit tab (OSV PyPI ecosystem)
         self.tab_audit = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_audit, text='Audit (OSV)')
+        self.notebook.add(self.tab_audit, text='監査 (OSV)')
         abar = ttk.Frame(self.tab_audit, padding=(4, 4))
         abar.pack(fill='x')
-        ab1 = ttk.Button(abar, text='Run OSV Scan', command=self.run_osv)
+        ab1 = ttk.Button(abar, text='OSVスキャン実行', command=self.run_osv)
+        ui_tooltip.attach(ab1, 'Run OSV Scan: OSV.dev (PyPI ecosystem) で脆弱性スキャン')
         ab1.pack(side='left')
-        ab2 = ttk.Button(abar, text='Force Rescan',
+        ab2 = ttk.Button(abar, text='強制再スキャン',
                          command=lambda: self.run_osv(force=True))
+        ui_tooltip.attach(ab2, 'Force Rescan: cache を無視して OSV.dev に再問い合わせ')
         ab2.pack(side='left', padx=(4, 0))
         self.audit_text = tk.Text(self.tab_audit, wrap='none', height=20)
         self.audit_text.pack(fill='both', expand=True, padx=4, pady=4)
 
         self._action_buttons.extend([
-            gb1, gb2, gb_min, gb_maj, gb3,
-            pb1, pb2, pb_wnt, pb_min, pb_maj, pb3,
+            gb1, gb2, gb_min, gb_maj, gb_safe, gb3,
+            pb1, pb2, pb_wnt, pb_min, pb_maj, pb_safe, pb3,
             ab1, ab2,
         ])
 
     # ── フィルタバー ──────────────────────────────────────────────────────────
+    # (label, internal value) — label は UI 表示用、value は status と対応。
     _STATUS_OPTIONS = [
-        ('All', None),
-        ('Outdated', 'outdated'),
-        ('Major', 'major'),
-        ('Minor', 'minor'),
-        ('Both', 'both'),
-        ('Latest', 'latest'),
-        ('Unknown', 'unknown'),
+        ('全て',     None),
+        ('古い',     'outdated'),
+        ('Major',    'major'),
+        ('Minor',    'minor'),
+        ('両方',     'both'),
+        ('最新',     'latest'),
+        ('未導入',   'not_installed'),
+        ('不明',     'unknown'),
     ]
 
     def _make_filter_bar(
@@ -174,12 +212,12 @@ class App(tk.Tk):
         bar = ttk.Frame(parent, padding=(4, 2))
         bar.pack(fill='x')
 
-        ttk.Label(bar, text='Filter:').pack(side='left')
+        ttk.Label(bar, text='検索:').pack(side='left')
         search_var = tk.StringVar()
         ttk.Entry(bar, textvariable=search_var, width=24).pack(side='left', padx=(4, 0))
 
-        ttk.Label(bar, text='Status:').pack(side='left', padx=(12, 4))
-        status_var = tk.StringVar(value='All')
+        ttk.Label(bar, text='状態:').pack(side='left', padx=(12, 4))
+        status_var = tk.StringVar(value='全て')
         status_combo = ttk.Combobox(
             bar, textvariable=status_var, state='readonly',
             values=[label for label, _ in self._STATUS_OPTIONS],
@@ -188,7 +226,7 @@ class App(tk.Tk):
         status_combo.pack(side='left')
 
         dev_var = tk.BooleanVar()
-        ttk.Checkbutton(bar, text='Dev only', variable=dev_var).pack(side='left', padx=(12, 0))
+        ttk.Checkbutton(bar, text='Devのみ', variable=dev_var).pack(side='left', padx=(12, 0))
 
         count_label = ttk.Label(bar, text='', foreground='#666')
         count_label.pack(side='right')
@@ -207,7 +245,7 @@ class App(tk.Tk):
             desc = VIEW_PRESET_DESCRIPTIONS.get(label)
             if desc:
                 ui_tooltip.attach(rb, desc)
-        view_label = ttk.Label(bar, text='View:', foreground='#666')
+        view_label = ttk.Label(bar, text='表示:', foreground='#666')
         view_label.pack(side='right', padx=(16, 4))
         ui_tooltip.attach(
             view_label,
@@ -284,7 +322,7 @@ class App(tk.Tk):
         except (TypeError, ValueError):
             days = 7
         state.set_cooldown_days(days)
-        self._set_status(f'Cooldown を {days} 日に設定 (Refresh で反映)')
+        self._set_status(f'Cooldown を {days} 日に設定 (再取得で反映)')
 
     def _cooldown(self) -> int:
         try:
@@ -295,7 +333,7 @@ class App(tk.Tk):
     # ── プロジェクト選択 ─────────────────────────────────────────────────
     def choose_project(self) -> None:
         chosen = filedialog.askdirectory(
-            title='Choose project folder (must contain pyproject.toml or requirements.txt)'
+            title='プロジェクトフォルダを選択 (pyproject.toml か requirements.txt が必要)'
         )
         if not chosen:
             return
@@ -330,7 +368,7 @@ class App(tk.Tk):
     # ── Project / Global の refresh ──────────────────────────────────────
     def refresh_project(self, force: bool = False) -> None:
         if not self.current_project:
-            self._set_status('Choose a project first', color='#a60')
+            self._set_status('先にプロジェクトを選択してください', color='#a60')
             return
         if not (
             (self.current_project / 'pyproject.toml').exists()
@@ -338,7 +376,7 @@ class App(tk.Tk):
         ):
             messagebox.showerror(
                 'PypkgUpdater',
-                f'pyproject.toml / requirements.txt not found in:\n{self.current_project}',
+                f'pyproject.toml / requirements.txt が見つかりません:\n{self.current_project}',
             )
             return
 
@@ -356,15 +394,22 @@ class App(tk.Tk):
                 return
 
         deps = pyproject.collect_dependencies(self.current_project)
+        # .venv の site-packages を覗いて実インストール版を埋める。
+        pyproject.attach_installed_info(self.current_project, deps)
+        not_installed_n = sum(1 for d in deps if not d.get('installed'))
+        ni_label = f', 未導入 {not_installed_n}' if not_installed_n else ''
         self._set_status(
-            f'Fetching from PyPI: 0/{len(deps)} (cooldown={cooldown}d)'
+            f'PyPI から取得: 0/{len(deps)} (cooldown={cooldown}日{ni_label})'
         )
 
         def work():
             def on_prog(done_count, total):
-                self._post_progress(done_count, total, 'Fetching from PyPI')
+                self._post_progress(done_count, total, 'PyPI から取得')
             infos = pypi.fetch_many(
-                [(d['name'], d['version'], d.get('spec')) for d in deps],
+                # registry 問い合わせの current は「実インストール版 → spec 正規化版」の順で
+                # フォールバック。currentPublishedAt 等は実版で参照したいので installed_version を優先。
+                [(d['name'], d.get('installed_version') or d.get('version'), d.get('spec'))
+                 for d in deps],
                 on_progress=on_prog,
                 cooldown_days=cooldown,
             )
@@ -391,21 +436,26 @@ class App(tk.Tk):
                 self._render_table(self.global_table, cached, from_cache=True)
                 return
 
-        self._set_status(f'Listing global packages (pip list)… (cooldown={cooldown}d)')
+        self._set_status(f'グローバルパッケージを列挙中 (pip list)… (cooldown={cooldown}日)')
 
         def work():
             installed = pip_global.list_global_packages()
             if not installed:
                 return {'packages': [], 'error': 'pip が見つからないか、パッケージがありません'}
+            # Global は `pip list` の結果なので常に installed=True。
             deps = [
-                {'name': p['name'], 'version': p['version'], 'dev': False, 'group': None}
+                {
+                    'name': p['name'], 'version': p['version'],
+                    'installed_version': p['version'], 'installed': True,
+                    'dev': False, 'group': None,
+                }
                 for p in installed
             ]
             total = len(deps)
-            self.after(0, lambda: self._set_status(f'Fetching from PyPI: 0/{total}'))
+            self.after(0, lambda: self._set_status(f'PyPI から取得: 0/{total}'))
 
             def on_prog(done_count, t):
-                self._post_progress(done_count, t, 'Fetching from PyPI')
+                self._post_progress(done_count, t, 'PyPI から取得')
             infos = pypi.fetch_many(
                 [(d['name'], d['version']) for d in deps],
                 on_progress=on_prog,
@@ -429,13 +479,13 @@ class App(tk.Tk):
         if payload.get('error'):
             self._set_status(payload['error'], color='#a60')
         else:
-            self._set_status('Loaded from cache' if from_cache else 'Updated')
+            self._set_status('cache から読込' if from_cache else '再取得完了')
         table.set_packages(payload.get('packages', []))
 
     # ── OSV ─────────────────────────────────────────────────────────────
     def run_osv(self, force: bool = False) -> None:
         if not self.current_project:
-            messagebox.showinfo('PypkgUpdater', 'Choose a project first.')
+            messagebox.showinfo('PypkgUpdater', '先にプロジェクトを選択してください')
             return
         self.audit_text.delete('1.0', 'end')
 
@@ -475,11 +525,11 @@ class App(tk.Tk):
             )
             return
 
-        self._set_status(f'Querying OSV.dev: {len(deps)} packages from {source}…')
+        self._set_status(f'OSV.dev へ問い合わせ: {len(deps)} 件 / source={source}…')
 
         def work():
             def on_prog(done_count, total):
-                self._post_progress(done_count, total, 'OSV scan')
+                self._post_progress(done_count, total, 'OSV スキャン')
             results = osv.query_batch(
                 [{'name': d['name'], 'version': d['version']} for d in deps],
                 on_progress=on_prog,
@@ -523,9 +573,53 @@ class App(tk.Tk):
         table = self.project_table if scope == 'project' else self.global_table
         pkg = table.get_selected()
         if not pkg:
-            messagebox.showinfo('PypkgUpdater', 'Select a package first.')
+            messagebox.showinfo('PypkgUpdater', '先にパッケージを選択してください')
             return
         webbrowser.open(f'https://pypi.org/project/{pkg["name"]}/')
+
+    # ── Safe Install (単一パッケージ ・cooldown 適用) ──────────────────
+    def _safe_install_global(self) -> None:
+        """未インストールパッケージを cooldown 適用後の版で 1 つずつ安全に追加。
+
+        Global は常に pip install -U で実行 (PypkgUpdater の Global タブは
+        現在の python が見ている site-packages を相手にするため)。
+        """
+        SafeInstallDialog(
+            self,
+            title='Safe Install (Global / pip install -U)',
+            pm='pip',
+            global_install=True,
+            cwd=None,
+            cooldown_days=self._cooldown(),
+            resolver=pypi.resolve_for_install,
+            pkg_manager=pkg_manager,
+            opener=pip_global.open_command_prompt,
+            on_installed=lambda: self.refresh_global(force=True),
+        )
+
+    def _safe_install_project(self) -> None:
+        """プロジェクトに未導入のパッケージを cooldown 適用後の版で追加。
+
+        PM は uv.lock / poetry.lock / Pipfile から検出 (uv add / poetry add / pip install)。
+        uv add / poetry add は pyproject.toml も書き換えるため、再取得で
+        Wanted/Latest が変わる可能性がある。
+        """
+        if not self.current_project:
+            messagebox.showinfo('PypkgUpdater', '先にプロジェクトを選択してください')
+            return
+        pm = pkg_manager.detect(self.current_project)
+        SafeInstallDialog(
+            self,
+            title=f'Safe Install (Project / {pm} add)',
+            pm=pm,
+            global_install=False,
+            cwd=str(self.current_project),
+            cooldown_days=self._cooldown(),
+            resolver=pypi.resolve_for_install,
+            pkg_manager=pkg_manager,
+            opener=pip_global.open_command_prompt,
+            on_installed=lambda: self.refresh_project(force=True),
+        )
 
     # ── Install (uv add / poetry add / pip install -U) ──────────────────
     def _install_selected(self, scope: str, target: str) -> None:
@@ -537,10 +631,10 @@ class App(tk.Tk):
         table = self.project_table if scope == 'project' else self.global_table
         selected = table.get_selected_all()
         if not selected:
-            messagebox.showinfo('PypkgUpdater', 'Select one or more packages first.')
+            messagebox.showinfo('PypkgUpdater', '先に 1 つ以上のパッケージを選択してください')
             return
         if scope == 'project' and not self.current_project:
-            messagebox.showinfo('PypkgUpdater', 'Choose a project first.')
+            messagebox.showinfo('PypkgUpdater', '先にプロジェクトを選択してください')
             return
 
         # target:
@@ -622,7 +716,7 @@ class App(tk.Tk):
         try:
             pip_global.open_command_prompt(cmd, cwd=cwd)
             self._set_status(
-                f'Opened prompt [{pm}]: install {len(specs)} package(s) '
+                f'別 console で実行中 [{pm}]: {len(specs)} 件を install '
                 f'({"global" if is_global else "project"})' + req_summary
             )
             # 履歴記録 (プロジェクトスコープのみ。global は記録先プロジェクトが無いため除外)
@@ -656,12 +750,28 @@ def _build_package_list(deps: list[dict], infos: dict[str, dict]) -> list[dict]:
         latest = info.get('latest')
         latest_minor = info.get('latestMinor')
         latest_major = info.get('latestMajor')
-        status = pep440.classify(d.get('version'), latest)
-        if latest_minor and latest_major:
-            status = 'both'
+        installed_version = d.get('installed_version')
+        is_installed = d.get('installed')
+        if is_installed is None:
+            is_installed = installed_version is not None
+        current_display = installed_version if is_installed else None
+        if not is_installed:
+            status = 'not_installed'
+        else:
+            status = pep440.classify(installed_version or d.get('version'), latest)
+            if latest_minor and latest_major:
+                status = 'both'
+        # 未導入時は「現在版に紐づく」field をクリアする。spec 正規化版
+        # ('==13.7.1' → '13.7.1') を current_version として fetch_one に渡しているため、
+        # そのままだと「入っていない版の公開日 / yanked 状態」が Current 列の付随情報
+        # として表示されてしまう。
+        current_pub = info.get('currentPublishedAt') if is_installed else None
+        current_age = info.get('currentAgeInDays') if is_installed else None
+        deprecated = info.get('deprecated') if is_installed else None
         out.append({
             'name': d['name'],
-            'current': d.get('version'),
+            'current': current_display,
+            'installed': is_installed,
             'spec': d.get('spec'),
             'latest': latest,
             'latestMinor': latest_minor,
@@ -670,16 +780,16 @@ def _build_package_list(deps: list[dict], infos: dict[str, dict]) -> list[dict]:
             'status': status,
             'dev': d.get('dev', False),
             'group': d.get('group'),
-            'currentPublishedAt': info.get('currentPublishedAt'),
+            'currentPublishedAt': current_pub,
             'latestPublishedAt': info.get('latestPublishedAt'),
             'latestMinorPublishedAt': info.get('latestMinorPublishedAt'),
             'latestMajorPublishedAt': info.get('latestMajorPublishedAt'),
             'allowedLatestPublishedAt': info.get('allowedLatestPublishedAt'),
-            'currentAgeInDays': info.get('currentAgeInDays'),
+            'currentAgeInDays': current_age,
             'latestMinorAgeInDays': info.get('latestMinorAgeInDays'),
             'latestMajorAgeInDays': info.get('latestMajorAgeInDays'),
             'allowedLatestAgeInDays': info.get('allowedLatestAgeInDays'),
-            'deprecated': info.get('deprecated'),
+            'deprecated': deprecated,
             'latestDeprecated': info.get('latestDeprecated'),
             'license': info.get('license'),
             'repositoryUrl': info.get('repositoryUrl'),

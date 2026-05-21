@@ -1,0 +1,29 @@
+[project]
+name = "pypkgupdater-example"
+version = "0.0.0"
+description = "PypkgUpdater dogfood fixture: diverse PEP 440 spec styles (no .venv on purpose)"
+requires-python = ">=3.10"
+dependencies = [
+  # 各 spec 形式の境界ケース:
+  "requests>=2.31,<3.0",      # operator chain (AND)
+  "click~=8.1",               # compatible release (~=)
+  "rich==13.7.1",             # exact pin
+  "httpx>=0.27",              # >= のみ (上限なし)
+  "packaging",                # spec なし (= 全許可)
+  "PyYAML==6.0.*",            # prefix wildcard
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "mypy~=1.10",
+]
+docs = [
+  "mkdocs>=1.5",
+]
+
+# PEP 735 dependency-groups (uv 0.4+ で利用)
+[dependency-groups]
+lint = [
+  "ruff>=0.4",
+]

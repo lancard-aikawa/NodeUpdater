@@ -244,6 +244,114 @@ def fetch_one(
     }
 
 
+def resolve_for_install(
+    name: str,
+    spec: str | None,
+    cooldown_days: int,
+) -> dict:
+    """Safe Install 用: spec と cooldown を考慮して install 予定版を決定する。
+
+    フロー:
+      1. PyPI JSON API から package metadata を取得
+      2. cooldown を満たす版集合 (eligible) を作る
+      3. spec が空/wildcard なら eligible の最高 stable
+         spec が PEP 440 specifier として解釈可能なら eligible ∩ spec の最高
+         spec が releases の key と完全一致するならその版を採用 (pre-release pin 等)
+         それ以外は unsupported
+      4. info.version (PyPI 最新) との差 (cooldown で弾かれた新版) を一覧化
+
+    Returns dict: node 側 `npm_registry.resolve_for_install` と同じキー構成。
+    """
+    empty = {
+        'name': name, 'found': False, 'resolved': None,
+        'resolved_published_at': None, 'resolved_age_days': None,
+        'raw_latest': None, 'raw_latest_published_at': None, 'raw_latest_age_days': None,
+        'excluded_newer': [], 'spec_status': 'none', 'reason': None,
+    }
+    url = f'{state.get_pypi_index_url()}/{urllib.parse.quote(name)}/json'
+    data = _http_get_json(url)
+    if not data:
+        empty['reason'] = f'PyPI に {name} が見つからない、または到達できませんでした'
+        return empty
+
+    info = data.get('info') or {}
+    releases = data.get('releases') or {}
+    raw_latest = info.get('version')
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=cooldown_days) if cooldown_days > 0 else None
+    all_versions = list(releases.keys())
+    if cutoff is not None:
+        eligible: list[str] = []
+        for v in all_versions:
+            ts = _first_upload_time(releases.get(v))
+            if not _is_after(ts, cutoff):
+                eligible.append(v)
+    else:
+        eligible = all_versions
+
+    spec_clean = (spec or '').strip()
+    if not spec_clean or pep440.is_wildcard_spec(spec_clean):
+        spec_status = 'wildcard' if spec_clean else 'none'
+        resolved = _highest_stable(eligible)
+    elif spec_clean in releases:
+        # PyPI に実在する exact version (pre-release pin 等) を許可
+        spec_status = 'exact_pin'
+        ts = _first_upload_time(releases.get(spec_clean))
+        if cutoff is None or not _is_after(ts, cutoff):
+            resolved = spec_clean
+        else:
+            resolved = None  # cooldown 未達なので install させない
+    elif pep440.parseable(spec_clean):
+        spec_status = 'parsed'
+        resolved = pep440.latest_matching(eligible, spec_clean)
+    else:
+        spec_status = 'unsupported'
+        resolved = None
+
+    excluded_newer: list[dict] = []
+    if cutoff is not None:
+        excluded: list[tuple[str, str]] = []
+        for v in all_versions:
+            p = pep440.parse(v)
+            if not p or p.is_prerelease:
+                continue
+            ts = _first_upload_time(releases.get(v))
+            if _is_after(ts, cutoff):
+                excluded.append((v, ts))
+        excluded.sort(key=lambda t: t[1], reverse=True)
+        for v, ts in excluded[:5]:
+            excluded_newer.append({
+                'version': v,
+                'published_at': ts,
+                'age_days': _age_in_days(ts),
+            })
+
+    raw_latest_ts = _first_upload_time(releases.get(raw_latest)) if raw_latest else None
+    resolved_ts = _first_upload_time(releases.get(resolved)) if resolved else None
+
+    reason: str | None = None
+    if spec_status == 'unsupported':
+        reason = f'spec "{spec_clean}" は Safe Install では未対応です (== / ~= / >= / <= / > / < / != のみ)'
+    elif resolved is None and spec_status == 'exact_pin':
+        reason = f'{spec_clean} は cooldown ({cooldown_days}日) を満たしていません'
+    elif resolved is None:
+        reason = f'cooldown {cooldown_days}日 を満たす版が見つかりませんでした'
+
+    return {
+        'name': name,
+        'found': True,
+        'resolved': resolved,
+        'resolved_published_at': resolved_ts,
+        'resolved_age_days': _age_in_days(resolved_ts),
+        'raw_latest': raw_latest,
+        'raw_latest_published_at': raw_latest_ts,
+        'raw_latest_age_days': _age_in_days(raw_latest_ts),
+        'excluded_newer': excluded_newer,
+        'spec_status': spec_status,
+        'reason': reason,
+    }
+
+
 def fetch_many(
     packages: list[tuple],
     max_workers: int | None = None,

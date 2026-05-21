@@ -219,6 +219,94 @@ def collect_dependencies(project_path: Path) -> list[dict]:
     return out
 
 
+def _canon(name: str) -> str:
+    """PEP 503 正規化: 小文字化し、`-_.` を `-` に揃える。
+
+    `My-Package_Name` も `my-package_name` も `my.package.name` も全て
+    `my-package-name` になる。pip / uv が `.dist-info` ディレクトリで使う
+    名前との比較に必要。
+    """
+    return re.sub(r'[-_.]+', '-', (name or '').strip().lower())
+
+
+def _find_site_packages(project_path: Path) -> Path | None:
+    """プロジェクト直下の `.venv` / `venv` から site-packages を探す。
+
+    poetry/pipenv のように venv をプロジェクト外に置くツールでは検出できない
+    (= 全部 未導入 扱いになる)。`poetry config virtualenvs.in-project true` 等で
+    `.venv` をプロジェクトに置けば検出される。
+    """
+    for venv_name in ('.venv', 'venv'):
+        venv = project_path / venv_name
+        if not venv.is_dir():
+            continue
+        # Windows: <venv>/Lib/site-packages
+        sp = venv / 'Lib' / 'site-packages'
+        if sp.is_dir():
+            return sp
+        # POSIX: <venv>/lib/python<x.y>/site-packages
+        lib = venv / 'lib'
+        if lib.is_dir():
+            try:
+                for child in lib.iterdir():
+                    if child.is_dir() and child.name.startswith('python'):
+                        sp = child / 'site-packages'
+                        if sp.is_dir():
+                            return sp
+            except OSError:
+                pass
+    return None
+
+
+def _read_site_packages(project_path: Path) -> dict[str, str]:
+    """site-packages を一度走査して `{canonical_name: version}` を返す。
+
+    `<NAME>-<VERSION>.dist-info` ディレクトリ名から抽出する (PEP 376)。
+    PEP 440 の version 内に '-' は無いので最後の '-' で分割すれば確実。
+    """
+    sp = _find_site_packages(project_path)
+    if not sp:
+        return {}
+    out: dict[str, str] = {}
+    try:
+        for entry in sp.iterdir():
+            if not entry.is_dir() or not entry.name.endswith('.dist-info'):
+                continue
+            stem = entry.name[: -len('.dist-info')]
+            idx = stem.rfind('-')
+            if idx <= 0:
+                continue
+            name = stem[:idx]
+            version = stem[idx + 1:]
+            if version:
+                out[_canon(name)] = version
+    except OSError:
+        return {}
+    return out
+
+
+def read_installed_version(project_path: Path, name: str) -> str | None:
+    """プロジェクトの venv に実際にインストール済みの version を読む。
+
+    未導入 / venv 無し / site-packages 不可 → None。
+    name は PEP 503 正規化して照合するので `My-Pkg` / `my_pkg` どちらでも OK。
+    """
+    return _read_site_packages(project_path).get(_canon(name))
+
+
+def attach_installed_info(project_path: Path, deps: list[dict]) -> list[dict]:
+    """各 dep に `installed_version` (str|None) と `installed` (bool) を付与する。
+
+    site-packages の走査は 1 回だけ。deps を in-place で書き換えつつ同オブジェクトを返す。
+    """
+    sp_map = _read_site_packages(project_path)
+    for d in deps:
+        v = sp_map.get(_canon(d.get('name', '')))
+        d['installed_version'] = v
+        d['installed'] = v is not None
+    return deps
+
+
 def project_name(project_path: Path) -> str:
     """pyproject.toml の [project].name または親ディレクトリ名。"""
     data = read_pyproject(project_path)
