@@ -195,6 +195,8 @@ class PackageTable(ttk.Frame):
             'gz':      ('Bundle (gz)',       80),
         }
         self._headings = headings
+        # 「理想幅」(プリセット切替時に復元する基準) を保持
+        self._default_widths: dict[str, int] = {c: w for c, (_, w) in headings.items()}
         right_aligned = {'age_cur', 'age_wnt', 'age_min', 'age_maj', 'gz'}
         centered = {'dev', 'prov', 'status', 'dep'}
         # ヘッダの色チップ画像を生成 (Wanted/Minor up/Major up 列のみ)。
@@ -239,6 +241,9 @@ class PackageTable(ttk.Frame):
         # Wanted カラム '?' セルにホバーツールチップ (raw spec 表示)
         tree.bind('<Motion>', self._on_motion)
         tree.bind('<Leave>', self._on_leave_tree)
+        # ウィンドウリサイズ / 初期表示時に列幅を再計算 (debounce 200ms)
+        tree.bind('<Configure>', self._on_tree_configure)
+        self._fit_after_id: str | None = None
         self.tree = tree
         # 行 iid → package dict のマップ（選択行の完全データ取得用）
         self._row_data: dict[str, dict] = {}
@@ -254,12 +259,67 @@ class PackageTable(ttk.Frame):
         self.set_view_preset(DEFAULT_PRESET)
 
     def set_view_preset(self, name: str) -> None:
-        """表示列セットを切替える。COLUMNS は維持し displaycolumns だけ変える。"""
+        """表示列セットを切替える。COLUMNS は維持し displaycolumns だけ変える。
+
+        切替後に `_fit_columns` を呼び、widget 幅に収まらない列の合計を
+        比例縮小する (理想幅に余裕がある場合は復元する)。
+        """
         cols = self.presets.get(name)
         if cols is None:
             # 不明な preset 名のフォールバック: 自テーブルの最初の preset を採用。
             cols = next(iter(self.presets.values()), self.COLUMNS)
         self.tree.configure(displaycolumns=cols)
+        # widget の最新サイズで再フィット (debounce 経由)
+        self._schedule_fit()
+
+    # ── 列幅オートフィット ───────────────────────────────────────────────
+    def _on_tree_configure(self, _event=None) -> None:
+        """ウィンドウリサイズや初回マッピング時に呼ばれる。debounce して fit。"""
+        self._schedule_fit()
+
+    def _schedule_fit(self) -> None:
+        if self._fit_after_id is not None:
+            try:
+                self.after_cancel(self._fit_after_id)
+            except tk.TclError:
+                pass
+        self._fit_after_id = self.after(200, self._fit_columns)
+
+    def _fit_columns(self) -> None:
+        """visible columns の合計が widget 幅を超えるなら比例縮小、収まるなら理想幅へ復元。
+
+        ttk.Treeview は表示列の合計幅 > widget 幅で横スクロールが出る。
+        プリセット切替で All を選んだ時など列数が増えると見切れるので、
+        scale = avail / total で各列を均等に縮める (最小幅 40px は保証)。
+        """
+        self._fit_after_id = None
+        try:
+            avail = self.tree.winfo_width()
+        except tk.TclError:
+            return
+        if avail < 100:
+            return  # まだレイアウトされていない (初回描画前)
+
+        visible = self.tree.cget('displaycolumns')
+        if not isinstance(visible, tuple) or not visible or visible == ('#all',):
+            visible = self.COLUMNS
+
+        # 縦スクロールバー幅ぶんを差し引いて余裕を持たせる
+        avail = max(100, avail - 4)
+
+        target = [(c, self._default_widths.get(c, 60)) for c in visible]
+        total = sum(w for _, w in target)
+        MIN_W = 40
+        if total <= avail:
+            # 収まる → 理想幅に復元 (前回 fit で縮められていた可能性があるため)
+            for c, w in target:
+                self.tree.column(c, width=w)
+            return
+
+        # 超過 → 比例縮小 (各列 MIN_W 保証)
+        scale = avail / total
+        for c, w in target:
+            self.tree.column(c, width=max(MIN_W, int(w * scale)))
 
     @staticmethod
     def _age_text(days) -> str:
