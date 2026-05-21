@@ -5,13 +5,15 @@ GitHub Token を設定するか GITHUB_TOKEN 環境変数を設定すると 5000
 """
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 
-from . import cache, state
+from . import cache, debug_log, state
 
 _UA = 'PkgUpdater/0.1'
 _API = 'https://api.github.com'
@@ -62,19 +64,67 @@ def _fetch_releases(owner: str, repo: str, limit: int) -> list[dict] | None:
     headers = {
         'User-Agent': _UA,
         'Accept': 'application/vnd.github+json',
+        'Accept-Encoding': 'gzip',
         'X-GitHub-Api-Version': '2022-11-28',
     }
     token = os.environ.get('GITHUB_TOKEN') or state.get_github_token()
     if token:
         headers['Authorization'] = f'Bearer {token}'
     req = urllib.request.Request(url, headers=headers)
+    short = f'{owner}/{repo}'
+    t0 = time.monotonic()
     try:
         with _open(req, _TIMEOUT) as resp:
-            if resp.status != 200:
+            status = resp.status
+            raw_body = resp.read()
+            if (resp.headers.get('Content-Encoding') or '').lower() == 'gzip':
+                try:
+                    body = gzip.decompress(raw_body)
+                except (OSError, EOFError):
+                    body = raw_body
+            else:
+                body = raw_body
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            if status != 200:
+                # 401/403 = レート制限 / 認証問題、404 = repo 無し or releases 無し
+                lv = 'WARN' if status in (401, 403) else 'INFO'
+                debug_log.log(
+                    'github_releases._fetch_releases',
+                    level=lv,
+                    summary=f'GitHub {status} ({duration_ms}ms) {short}',
+                    status=status, duration_ms=duration_ms, token_present=bool(token),
+                    detail={'url': url, 'body_head': body[:300].decode('utf-8', 'replace')},
+                )
                 return None
-            return json.loads(resp.read().decode('utf-8'))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+            try:
+                data = json.loads(body.decode('utf-8'))
+            except json.JSONDecodeError as e:
+                debug_log.log(
+                    'github_releases._fetch_releases',
+                    level='ERROR',
+                    summary=f'GitHub JSON parse 失敗 ({duration_ms}ms) {short}',
+                    duration_ms=duration_ms,
+                    detail={'url': url, 'error': str(e)},
+                )
+                return None
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        debug_log.log(
+            'github_releases._fetch_releases',
+            level='ERROR',
+            summary=f'GitHub 失敗 ({duration_ms}ms) {short}: {type(e).__name__}',
+            duration_ms=duration_ms, error_type=type(e).__name__,
+            detail={'url': url, 'error': str(e)},
+        )
         return None
+    debug_log.log(
+        'github_releases._fetch_releases',
+        level='DEBUG',
+        summary=f'GitHub OK ({duration_ms}ms) {short}: {len(data)} releases',
+        status=status, duration_ms=duration_ms, count=len(data),
+        detail={'url': url},
+    )
+    return data
 
 
 def fetch_releases_cached(owner: str, repo: str, limit: int = _DEFAULT_LIMIT) -> list[dict]:

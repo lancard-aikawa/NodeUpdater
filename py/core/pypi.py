@@ -15,14 +15,16 @@ Node 側の npm_registry.py と同形式の dict を返す:
 """
 from __future__ import annotations
 
+import gzip
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
-from shared import state
+from shared import debug_log, state
 
 from . import pep440
 
@@ -41,14 +43,86 @@ def _open(req: urllib.request.Request, timeout: int):
 
 
 def _http_get_json(url: str, timeout: int = _TIMEOUT) -> dict | None:
-    req = urllib.request.Request(url, headers={'User-Agent': _UA, 'Accept': 'application/json'})
+    # gzip 圧縮を明示的に要求 (転送量を 5〜10x 削減)。
+    req = urllib.request.Request(url, headers={
+        'User-Agent': _UA,
+        'Accept': 'application/json',
+        'Accept-Encoding': 'gzip',
+    })
+    short_url = _shorten_url(url)
+    t0 = time.monotonic()
     try:
         with _open(req, timeout) as resp:
-            if resp.status != 200:
+            status = resp.status
+            raw_body = resp.read()
+            if (resp.headers.get('Content-Encoding') or '').lower() == 'gzip':
+                try:
+                    body = gzip.decompress(raw_body)
+                except (OSError, EOFError) as e:
+                    duration_ms = int((time.monotonic() - t0) * 1000)
+                    debug_log.log(
+                        'pypi._http_get_json',
+                        level='ERROR',
+                        summary=f'gzip 展開失敗 ({duration_ms}ms) {short_url}',
+                        duration_ms=duration_ms,
+                        detail={'url': url, 'error': str(e)},
+                    )
+                    return None
+            else:
+                body = raw_body
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            if status != 200:
+                debug_log.log(
+                    'pypi._http_get_json',
+                    level='WARN',
+                    summary=f'GET {status} ({duration_ms}ms) {short_url}',
+                    status=status, duration_ms=duration_ms,
+                    detail={'url': url, 'body_head': body[:500].decode('utf-8', 'replace')},
+                )
                 return None
-            return json.loads(resp.read().decode('utf-8'))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+            try:
+                data = json.loads(body.decode('utf-8'))
+            except json.JSONDecodeError as e:
+                debug_log.log(
+                    'pypi._http_get_json',
+                    level='ERROR',
+                    summary=f'GET 200 JSON parse 失敗 ({duration_ms}ms) {short_url}',
+                    status=status, duration_ms=duration_ms, error=str(e),
+                    detail={'url': url, 'body_head': body[:500].decode('utf-8', 'replace')},
+                )
+                return None
+            wire_size = len(raw_body)
+            body_size = len(body)
+            ratio = f' (gzip {wire_size / body_size:.2f}x)' if wire_size != body_size else ''
+            debug_log.log(
+                'pypi._http_get_json',
+                level='DEBUG',
+                summary=f'GET 200 ({duration_ms}ms, wire {wire_size:,}B / body {body_size:,}B{ratio}) {short_url}',
+                status=status, duration_ms=duration_ms,
+                wire_size=wire_size, body_size=body_size,
+                detail={'url': url},
+            )
+            return data
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        debug_log.log(
+            'pypi._http_get_json',
+            level='ERROR',
+            summary=f'GET 失敗 ({duration_ms}ms) {short_url}: {type(e).__name__}',
+            duration_ms=duration_ms, error_type=type(e).__name__,
+            detail={'url': url, 'error': str(e)},
+        )
         return None
+
+
+def _shorten_url(url: str) -> str:
+    """ログ summary 用に長い registry URL を短縮 (ホスト + パス末尾)。"""
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        return f'{p.netloc}{p.path[-80:]}'
+    except (ValueError, TypeError):
+        return url[:100]
 
 
 def _age_in_days(iso_ts: str | None) -> int | None:

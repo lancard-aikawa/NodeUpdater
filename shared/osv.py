@@ -5,12 +5,14 @@ OSV.dev の ecosystem ID は https://ossf.github.io/osv-schema/ の表参照。
 """
 from __future__ import annotations
 
+import gzip
 import json
+import time
 import urllib.error
 import urllib.request
 from typing import Callable
 
-from . import state
+from . import debug_log, state
 
 _UA = 'PkgUpdater/0.1'
 _TIMEOUT = 25
@@ -71,10 +73,16 @@ def _post_batch(queries: list[dict]) -> list[dict]:
     req = urllib.request.Request(
         state.get_osv_api_url(),
         data=body,
-        headers={'User-Agent': _UA, 'Content-Type': 'application/json', 'Accept': 'application/json'},
+        headers={
+            'User-Agent': _UA,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Accept-Encoding': 'gzip',
+        },
         method='POST',
     )
     proxy = state.get_proxy_url()
+    t0 = time.monotonic()
     try:
         if proxy:
             opener = urllib.request.build_opener(
@@ -84,10 +92,38 @@ def _post_batch(queries: list[dict]) -> list[dict]:
         else:
             resp_cm = urllib.request.urlopen(req, timeout=_TIMEOUT)
         with resp_cm as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+            raw_body = resp.read()
+            status = resp.status
+            content_encoding = (resp.headers.get('Content-Encoding') or '').lower()
+            duration_ms = int((time.monotonic() - t0) * 1000)
+        if content_encoding == 'gzip':
+            try:
+                decoded = gzip.decompress(raw_body)
+            except (OSError, EOFError):
+                decoded = raw_body
+        else:
+            decoded = raw_body
+        data = json.loads(decoded.decode('utf-8'))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as e:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        debug_log.log(
+            'osv._post_batch',
+            level='ERROR',
+            summary=f'OSV.dev POST 失敗 ({duration_ms}ms) {len(queries)} queries: {type(e).__name__}',
+            duration_ms=duration_ms, query_count=len(queries),
+            error_type=type(e).__name__,
+            detail={'url': state.get_osv_api_url(), 'error': str(e)},
+        )
         return [{} for _ in queries]
     results = data.get('results') or []
+    debug_log.log(
+        'osv._post_batch',
+        level='DEBUG',
+        summary=f'OSV.dev POST {status} ({duration_ms}ms) {len(queries)} queries → {len(results)} results',
+        status=status, duration_ms=duration_ms,
+        query_count=len(queries), result_count=len(results),
+        detail={'url': state.get_osv_api_url()},
+    )
     if len(results) < len(queries):
         results = results + [{} for _ in range(len(queries) - len(results))]
     return results[:len(queries)]

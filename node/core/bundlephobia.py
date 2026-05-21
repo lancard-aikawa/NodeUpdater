@@ -6,13 +6,15 @@
 """
 from __future__ import annotations
 
+import gzip
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from shared import cache, state
+from shared import cache, debug_log, state
 
 _UA = 'NodeUpdater/0.1'
 _BASE = 'https://bundlephobia.com/api/size'
@@ -41,16 +43,63 @@ def fetch_one(name: str, version: str | None) -> dict | None:
         return None
     pkg = urllib.parse.quote(f'{name}@{version}', safe='@')
     url = f'{_BASE}?package={pkg}'
+    short = f'{name}@{version}'
     req = urllib.request.Request(
-        url, headers={'User-Agent': _UA, 'Accept': 'application/json'}
+        url, headers={
+            'User-Agent': _UA, 'Accept': 'application/json', 'Accept-Encoding': 'gzip',
+        },
     )
+    t0 = time.monotonic()
     try:
         with _open(req, _TIMEOUT) as resp:
-            if resp.status != 200:
+            status = resp.status
+            raw_body = resp.read()
+            if (resp.headers.get('Content-Encoding') or '').lower() == 'gzip':
+                try:
+                    body = gzip.decompress(raw_body)
+                except (OSError, EOFError):
+                    body = raw_body  # 展開失敗時は raw を流して JSON パースに任せる
+            else:
+                body = raw_body
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            if status != 200:
+                debug_log.log(
+                    'bundlephobia.fetch_one',
+                    level='WARN',
+                    summary=f'bundlephobia {status} ({duration_ms}ms) {short}',
+                    status=status, duration_ms=duration_ms,
+                    detail={'url': url, 'body_head': body[:300].decode('utf-8', 'replace')},
+                )
                 return None
-            data = json.loads(resp.read().decode('utf-8'))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+            try:
+                data = json.loads(body.decode('utf-8'))
+            except json.JSONDecodeError as e:
+                debug_log.log(
+                    'bundlephobia.fetch_one',
+                    level='ERROR',
+                    summary=f'bundlephobia JSON parse 失敗 ({duration_ms}ms) {short}',
+                    duration_ms=duration_ms,
+                    detail={'url': url, 'error': str(e)},
+                )
+                return None
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        debug_log.log(
+            'bundlephobia.fetch_one',
+            level='WARN',
+            summary=f'bundlephobia 失敗 ({duration_ms}ms) {short}: {type(e).__name__}',
+            duration_ms=duration_ms, error_type=type(e).__name__,
+            detail={'url': url, 'error': str(e)},
+        )
         return None
+    debug_log.log(
+        'bundlephobia.fetch_one',
+        level='DEBUG',
+        summary=f'bundlephobia OK ({duration_ms}ms) {short}: {data.get("size")} / gz {data.get("gzip")}',
+        duration_ms=duration_ms,
+        size=data.get('size'), gzip=data.get('gzip'),
+        detail={'url': url},
+    )
     return {'size': data.get('size'), 'gzip': data.get('gzip')}
 
 
