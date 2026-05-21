@@ -6,12 +6,18 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 from shared import debug_log
 
 # 直近の list_global_packages 呼出失敗時の診断情報。
 # (exit_code, stderr, stdout 先頭) を保持し、UI 側から status バーに表示できる。
 last_error: dict | None = None
+
+# `npm root -g` の結果のプロセス内キャッシュ。npm プロセス起動コスト
+# (特に NVM shim + AV スキャン) を毎回払うのを避けるため。
+# Node バージョン切替で path が変わる可能性に備え、利用前に dir 存在チェック。
+_global_root_cache: str | None = None
 
 
 def _resolve_npm_command() -> list[str] | None:
@@ -34,11 +40,14 @@ def _resolve_npm_command() -> list[str] | None:
     return None
 
 
-def _run(args: list[str], timeout: int = 30) -> str | None:
+def _run(args: list[str], timeout: int = 90) -> str | None:
     """args の先頭 ('npm' 等) を絶対パスに解決して subprocess.run。
 
     解決できなければ last_error にその旨を記録して None を返す。
     失敗時は debug_log にも残す (UI から Debug Log… で確認できる)。
+
+    タイムアウトは 90 秒 (デフォルト)。`npm list -g` は環境によって 30 秒を
+    超えることがある (NVM 経由 / AV スキャン / cache miss / SSD 飽和等)。
     """
     global last_error
     resolved_head = _resolve_npm_command()
@@ -95,14 +104,113 @@ def _run(args: list[str], timeout: int = 30) -> str | None:
 
 
 def global_root() -> str | None:
+    """`npm root -g` の結果をプロセス内キャッシュして返す。
+
+    1 回 npm を起動して結果を保持。次回以降は path の存在確認だけで即返す。
+    Node を NVM で切替えた等でキャッシュした path が消えていたら再取得する。
+    """
+    global _global_root_cache
+    if _global_root_cache and Path(_global_root_cache).is_dir():
+        return _global_root_cache
     out = _run(['npm', 'root', '-g'])
-    return out.strip() if out else None
+    if out:
+        _global_root_cache = out.strip()
+    return _global_root_cache
 
 
 def list_global_packages() -> list[dict]:
-    """`npm list -g --depth=0 --json` の結果を [{name, version}, ...] に整形。"""
+    """グローバルパッケージ一覧を [{name, version}, ...] で返す。
+
+    Strategy:
+      1. `npm root -g` で global node_modules path を取得 (軽量)
+      2. その配下を **直接走査** して各 package.json を読む (npm list -g より高速)
+      3. 失敗時 (権限/破損/想定外構造) は従来の `npm list -g --json` に fall back
+
+    高速化の理由: `npm list -g` は依存ツリー全体を解析するため NVM/AV 環境では
+    30 秒以上かかることがある。直接走査は N 個の package.json を読むだけで
+    1 桁速くなる。
+    """
+    root = global_root()
+    if root:
+        packages = _list_via_filesystem(root)
+        if packages:
+            return packages
+    # 直接走査が空 / root 不明 → 従来の npm list に fall back
+    return _list_via_npm_cli()
+
+
+def _list_via_filesystem(root: str) -> list[dict]:
+    """`<npm root -g>` 配下の通常 / scoped パッケージを直接走査して返す。
+
+    通常: <root>/<pkg>/package.json
+    scoped: <root>/@scope/<pkg>/package.json
+    `.bin` / `.cache` 等の dot dir は skip。symlink (npm link) も dir 扱いで読む。
+    """
     global last_error
-    out = _run(['npm', 'list', '-g', '--depth=0', '--json'])
+    root_path = Path(root)
+    if not root_path.is_dir():
+        last_error = {'reason': f'npm root -g not a directory: {root}'}
+        debug_log.log('npm_global._list_via_filesystem',
+                      reason='root path not a directory', root=root)
+        return []
+    packages: list[dict] = []
+    try:
+        for entry in root_path.iterdir():
+            if not entry.is_dir() or entry.name.startswith('.'):
+                continue
+            if entry.name.startswith('@'):
+                # scoped: 1 階層下を見る
+                try:
+                    for sub in entry.iterdir():
+                        if sub.is_dir():
+                            pkg = _read_pkg_name_version(sub / 'package.json')
+                            if pkg:
+                                packages.append(pkg)
+                except OSError:
+                    continue
+            else:
+                pkg = _read_pkg_name_version(entry / 'package.json')
+                if pkg:
+                    packages.append(pkg)
+    except OSError as e:
+        last_error = {'reason': f'iterdir failed: {e}'}
+        debug_log.log('npm_global._list_via_filesystem',
+                      reason='iterdir failed', error=str(e), root=root)
+        return []
+    last_error = None
+    debug_log.log('npm_global._list_via_filesystem',
+                  root=root, count=len(packages))
+    return packages
+
+
+def _read_pkg_name_version(path: Path) -> dict | None:
+    """package.json から name / version を抽出。読めなければ None。"""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    name = data.get('name')
+    ver = data.get('version')
+    if not isinstance(name, str) or not name:
+        return None
+    return {'name': name, 'version': ver if isinstance(ver, str) and ver else None}
+
+
+def _list_via_npm_cli() -> list[dict]:
+    """フォールバック: 従来の `npm list -g --depth=0 --json`。
+
+    audit / fund / update-notifier の副作用を flag で無効化して若干高速化。
+    それでも 30〜90 秒かかる可能性があるので、通常は直接走査が優先される。
+    """
+    global last_error
+    out = _run([
+        'npm', 'list', '-g', '--depth=0', '--json',
+        '--no-audit', '--no-fund',
+    ])
     if not out:
         return []
     try:

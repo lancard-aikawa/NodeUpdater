@@ -107,14 +107,14 @@ class App(tk.Tk):
                          command=lambda: self.refresh_global(force=True))
         ui_tooltip.attach(gb2, 'Force Refresh: cache を無視してリロード')
         gb2.pack(side='left', padx=(4, 0))
-        gb_min = ttk.Button(gbar, text='Minor版に更新…',
+        self._btn_glob_minor = ttk.Button(gbar, text='Minor版に更新…',
                             command=lambda: self._install_selected('global', 'minor'))
-        ui_tooltip.attach(gb_min, 'Install Minor Up: 同 major 内の最新版に更新 (spec 無視)')
-        gb_min.pack(side='left', padx=(12, 0))
-        gb_maj = ttk.Button(gbar, text='Major版に更新…',
+        ui_tooltip.attach(self._btn_glob_minor, 'Install Minor Up: 同 major 内の最新版に更新 (spec 無視)')
+        self._btn_glob_minor.pack(side='left', padx=(12, 0))
+        self._btn_glob_major = ttk.Button(gbar, text='Major版に更新…',
                             command=lambda: self._install_selected('global', 'major'))
-        ui_tooltip.attach(gb_maj, 'Install Major Up: 次 major へ更新 (Breaking Change の可能性)')
-        gb_maj.pack(side='left', padx=(4, 0))
+        ui_tooltip.attach(self._btn_glob_major, 'Install Major Up: 次 major へ更新 (Breaking Change の可能性)')
+        self._btn_glob_major.pack(side='left', padx=(4, 0))
         gb_safe = ttk.Button(gbar, text='安全インストール…',
                              command=self._safe_install_global)
         ui_tooltip.attach(
@@ -129,7 +129,9 @@ class App(tk.Tk):
         # Global は spec が無いため Wanted 列は意味を持たない。Wanted preset と
         # 'All' preset 内の wanted/age_wnt 列は VIEW_PRESETS_GLOBAL で除外している。
         from py.ui.table import VIEW_PRESETS_GLOBAL
-        self.global_table = PackageTable(self.tab_global, presets=VIEW_PRESETS_GLOBAL)
+        self.global_table = PackageTable(
+            self.tab_global, on_select=self._on_row_select, presets=VIEW_PRESETS_GLOBAL,
+        )
         # Global は spec が無いため Wanted 列は常に空。既定は Latest にしておく。
         self._make_filter_bar(self.tab_global, self.global_table, default_preset='Latest')
         self.global_table.pack(fill='both', expand=True, padx=4, pady=4)
@@ -146,18 +148,18 @@ class App(tk.Tk):
                          command=lambda: self.refresh_project(force=True))
         ui_tooltip.attach(pb2, 'Force Refresh: cache を無視してリロード')
         pb2.pack(side='left', padx=(4, 0))
-        pb_wnt = ttk.Button(pbar, text='Wanted版で更新…',
+        self._btn_proj_wanted = ttk.Button(pbar, text='Wanted版で更新…',
                             command=lambda: self._install_selected('project', 'wanted'))
-        ui_tooltip.attach(pb_wnt, 'Install Wanted: spec (== ~= >= 等) が許す最高版へ更新')
-        pb_wnt.pack(side='left', padx=(12, 0))
-        pb_min = ttk.Button(pbar, text='Minor版に更新…',
+        ui_tooltip.attach(self._btn_proj_wanted, 'Install Wanted: spec (== ~= >= 等) が許す最高版へ更新')
+        self._btn_proj_wanted.pack(side='left', padx=(12, 0))
+        self._btn_proj_minor = ttk.Button(pbar, text='Minor版に更新…',
                             command=lambda: self._install_selected('project', 'minor'))
-        ui_tooltip.attach(pb_min, 'Install Minor Up: 同 major 内の最新版に更新 (spec 無視)')
-        pb_min.pack(side='left', padx=(4, 0))
-        pb_maj = ttk.Button(pbar, text='Major版に更新…',
+        ui_tooltip.attach(self._btn_proj_minor, 'Install Minor Up: 同 major 内の最新版に更新 (spec 無視)')
+        self._btn_proj_minor.pack(side='left', padx=(4, 0))
+        self._btn_proj_major = ttk.Button(pbar, text='Major版に更新…',
                             command=lambda: self._install_selected('project', 'major'))
-        ui_tooltip.attach(pb_maj, 'Install Major Up: 次 major へ更新 (Breaking Change の可能性)')
-        pb_maj.pack(side='left', padx=(4, 0))
+        ui_tooltip.attach(self._btn_proj_major, 'Install Major Up: 次 major へ更新 (Breaking Change の可能性)')
+        self._btn_proj_major.pack(side='left', padx=(4, 0))
         pb_safe = ttk.Button(pbar, text='安全インストール…',
                              command=self._safe_install_project)
         ui_tooltip.attach(
@@ -170,7 +172,7 @@ class App(tk.Tk):
                          command=lambda: self._open_selected_pypi('project'))
         ui_tooltip.attach(pb3, 'Open on PyPI: 選択行のパッケージページをブラウザで開く')
         pb3.pack(side='left', padx=(12, 0))
-        self.project_table = PackageTable(self.tab_project)
+        self.project_table = PackageTable(self.tab_project, on_select=self._on_row_select)
         self._make_filter_bar(self.tab_project, self.project_table)
         self.project_table.pack(fill='both', expand=True, padx=4, pady=4)
 
@@ -190,10 +192,19 @@ class App(tk.Tk):
         self.audit_text.pack(fill='both', expand=True, padx=4, pady=4)
 
         self._action_buttons.extend([
-            gb1, gb2, gb_min, gb_maj, gb_safe, gb3,
-            pb1, pb2, pb_wnt, pb_min, pb_maj, pb_safe, pb3,
+            gb1, gb2, self._btn_glob_minor, self._btn_glob_major, gb_safe, gb3,
+            pb1, pb2,
+            self._btn_proj_wanted, self._btn_proj_minor, self._btn_proj_major,
+            pb_safe, pb3,
             ab1, ab2,
         ])
+        # 選択依存ボタン: 起動直後は非選択状態なので全て disable で開始
+        self._install_buttons = (
+            self._btn_proj_wanted, self._btn_proj_minor, self._btn_proj_major,
+            self._btn_glob_minor, self._btn_glob_major,
+        )
+        for btn in self._install_buttons:
+            btn.state(['disabled'])
 
     # ── フィルタバー ──────────────────────────────────────────────────────────
     # (label, internal value) — label は UI 表示用、value は status と対応。
@@ -294,6 +305,55 @@ class App(tk.Tk):
             for b in self._action_buttons:
                 b.state(['!disabled'])
             self._busy = False
+            # busy で一律 enable に戻ったあと、選択状態に応じて install ボタンを再評価する
+            self._refresh_install_buttons()
+
+    # ── 選択イベントと Install ボタン状態 ──────────────────────────────────
+    def _on_row_select(self, selected: list[dict]) -> None:
+        """選択変化時のフック: install ボタンの状態を更新する。
+
+        selected は常に list で渡る (Esc 等で 0 件になっても発火)。
+        """
+        self._refresh_install_buttons()
+
+    def _refresh_install_buttons(self) -> None:
+        """両タブの選択状態を見て各 install ボタンの enable/disable を更新する。
+
+        busy 中は触らない (`_set_busy` が一律 disable しており、解除時に再評価される)。
+        """
+        if self._busy:
+            return
+        self._update_install_state('project', self.project_table.get_selected_all())
+        self._update_install_state('global', self.global_table.get_selected_all())
+
+    def _update_install_state(self, scope: str, selected: list[dict]) -> None:
+        """scope 側の install ボタンを、selected の各行が当該 target に
+        有効な更新候補を持つかで切替える (1 行でも持てば enable)。"""
+        if scope == 'project':
+            specs = [
+                (self._btn_proj_wanted, 'allowedLatest', True),
+                (self._btn_proj_minor, 'latestMinor', False),
+                (self._btn_proj_major, 'latestMajor', False),
+            ]
+        else:
+            specs = [
+                (self._btn_glob_minor, 'latestMinor', False),
+                (self._btn_glob_major, 'latestMajor', False),
+            ]
+        for btn, key, is_wanted in specs:
+            has_any = False
+            for p in selected:
+                v = p.get(key)
+                if is_wanted:
+                    # Wanted: '?' (解釈不能) や current と同じ場合は除外
+                    if v and v != '?' and v != p.get('current'):
+                        has_any = True
+                        break
+                else:
+                    if v:
+                        has_any = True
+                        break
+            btn.state(['!disabled'] if has_any else ['disabled'])
 
     def _post_progress(self, done: int, total: int, label: str) -> None:
         self.after(0, lambda: self._set_status(f'{label}: {done}/{total}'))

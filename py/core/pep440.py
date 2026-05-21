@@ -131,11 +131,20 @@ def normalize(raw: str | None) -> str | None:
 
 
 def classify(current: str | None, latest: str | None) -> str:
-    """'latest' | 'minor' | 'major' | 'unknown'"""
+    """'latest' | 'minor' | 'major' | 'unknown'
+
+    cooldown により latest が current より古い版に rolled back される
+    (= 「実は最新が install 済みだが、cutoff より新しいので候補集合から除外」)
+    ケースでは、current >= latest として latest 扱いにする。そうしないと
+    「現在版が最新 stable より新しい」のに minor の黄色行で警告されてしまう。
+    """
     c, l = parse(current), parse(latest)
     if not c or not l:
         return 'unknown'
     if c.release == l.release and c.pre == l.pre and c.post == l.post:
+        return 'latest'
+    # current >= latest なら upgrade 不要 → latest 扱い
+    if not c.__lt__(l):
         return 'latest'
     if l.major > c.major:
         return 'major'

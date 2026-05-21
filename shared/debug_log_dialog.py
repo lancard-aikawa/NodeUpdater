@@ -40,16 +40,22 @@ class DebugLogDialog(tk.Toplevel):
         ttk.Button(bar, text='Clear', command=self._clear).pack(side='right', padx=(0, 4))
         ttk.Button(bar, text='Refresh', command=self._refresh).pack(side='left')
 
-        # ── 本文 (上下スクロール可能) ─────────────────────────────────────────
+        # ── 本文 (上下 + 左右スクロール可能) ──────────────────────────────────
+        # 1 行が長い (Windows pathや JSON 等) のでデバッグログは横スクロール必須。
+        # wrap='none' と xscrollcommand を組合せて、(text, vsb, hsb) を grid 配置。
         text_frame = ttk.Frame(body)
         text_frame.pack(side='top', fill='both', expand=True, pady=(8, 0))
         self.text = tk.Text(
             text_frame, wrap='none', state='disabled', font=('TkFixedFont', 9),
         )
-        self.text.pack(side='left', fill='both', expand=True)
         vsb = ttk.Scrollbar(text_frame, orient='vertical', command=self.text.yview)
-        vsb.pack(side='right', fill='y')
-        self.text.configure(yscrollcommand=vsb.set)
+        hsb = ttk.Scrollbar(text_frame, orient='horizontal', command=self.text.xview)
+        self.text.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.text.grid(row=0, column=0, sticky='nsew')
+        vsb.grid(row=0, column=1, sticky='ns')
+        hsb.grid(row=1, column=0, sticky='ew')
+        text_frame.grid_rowconfigure(0, weight=1)
+        text_frame.grid_columnconfigure(0, weight=1)
 
         self.bind('<Escape>', lambda _e: self.destroy())
         self.after(50, self.grab_set)

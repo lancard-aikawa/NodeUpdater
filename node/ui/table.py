@@ -378,11 +378,11 @@ class PackageTable(ttk.Frame):
         return [self._row_data[iid] for iid in self.tree.selection() if iid in self._row_data]
 
     def _on_select(self, _event) -> None:
+        # selection が空になるケース (Esc/外クリック) でも常に発火させる。
+        # ボタン enable/disable など「非選択 → 全部 disable」の更新を漏らさないため。
         if not self.on_select:
             return
-        pkg = self.get_selected()
-        if pkg:
-            self.on_select(pkg)
+        self.on_select(self.get_selected_all())
 
     # ── Wanted セル '?' のホバーツールチップ ─────────────────────────
     def _resolve_column_name(self, col_id: str) -> str | None:

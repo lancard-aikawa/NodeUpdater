@@ -141,14 +141,14 @@ class App(tk.Tk):
         b5 = ttk.Button(global_bar, text='強制リロード', command=lambda: self.refresh_global(force=True))
         ui_tooltip.attach(b5, 'Force Refresh: cache を無視してリロード')
         b5.pack(side='left', padx=(4, 0))
-        b6 = ttk.Button(global_bar, text='Minor版に更新…',
+        self._btn_glob_minor = ttk.Button(global_bar, text='Minor版に更新…',
                         command=lambda: self._install_selected('global', 'minor'))
-        ui_tooltip.attach(b6, 'Install Minor Up…: 選択行を同 major 内の最新版に更新')
-        b6.pack(side='left', padx=(12, 0))
-        b6b = ttk.Button(global_bar, text='Major版に更新…',
+        ui_tooltip.attach(self._btn_glob_minor, 'Install Minor Up…: 選択行を同 major 内の最新版に更新')
+        self._btn_glob_minor.pack(side='left', padx=(12, 0))
+        self._btn_glob_major = ttk.Button(global_bar, text='Major版に更新…',
                          command=lambda: self._install_selected('global', 'major'))
-        ui_tooltip.attach(b6b, 'Install Major Up…: 選択行を次 major へ更新 (Breaking Change の可能性)')
-        b6b.pack(side='left', padx=(4, 0))
+        ui_tooltip.attach(self._btn_glob_major, 'Install Major Up…: 選択行を次 major へ更新 (Breaking Change の可能性)')
+        self._btn_glob_major.pack(side='left', padx=(4, 0))
         b6e = ttk.Button(global_bar, text='安全インストール…',
                          command=self._safe_install_global)
         ui_tooltip.attach(
@@ -186,18 +186,18 @@ class App(tk.Tk):
         b2 = ttk.Button(project_bar, text='強制リロード', command=lambda: self.refresh_project(force=True))
         ui_tooltip.attach(b2, 'Force Refresh: cache を無視してリロード')
         b2.pack(side='left', padx=(4, 0))
-        b3w = ttk.Button(project_bar, text='Wanted版で更新…',
+        self._btn_proj_wanted = ttk.Button(project_bar, text='Wanted版で更新…',
                          command=lambda: self._install_selected('project', 'wanted'))
-        ui_tooltip.attach(b3w, 'Install Wanted: spec (^/~/range) が許す最高版へ更新')
-        b3w.pack(side='left', padx=(12, 0))
-        b3a = ttk.Button(project_bar, text='Minor版に更新…',
+        ui_tooltip.attach(self._btn_proj_wanted, 'Install Wanted: spec (^/~/range) が許す最高版へ更新')
+        self._btn_proj_wanted.pack(side='left', padx=(12, 0))
+        self._btn_proj_minor = ttk.Button(project_bar, text='Minor版に更新…',
                          command=lambda: self._install_selected('project', 'minor'))
-        ui_tooltip.attach(b3a, 'Install Minor Up: 同 major 内の最新版に更新 (spec 無視)')
-        b3a.pack(side='left', padx=(4, 0))
-        b3b = ttk.Button(project_bar, text='Major版に更新…',
+        ui_tooltip.attach(self._btn_proj_minor, 'Install Minor Up: 同 major 内の最新版に更新 (spec 無視)')
+        self._btn_proj_minor.pack(side='left', padx=(4, 0))
+        self._btn_proj_major = ttk.Button(project_bar, text='Major版に更新…',
                          command=lambda: self._install_selected('project', 'major'))
-        ui_tooltip.attach(b3b, 'Install Major Up: 次 major へ更新 (Breaking Change の可能性)')
-        b3b.pack(side='left', padx=(4, 0))
+        ui_tooltip.attach(self._btn_proj_major, 'Install Major Up: 次 major へ更新 (Breaking Change の可能性)')
+        self._btn_proj_major.pack(side='left', padx=(4, 0))
         b3 = ttk.Button(project_bar, text='npmで開く',
                         command=lambda: self._open_selected_npm('project'))
         ui_tooltip.attach(b3, 'Open on npm: 選択行のパッケージページをブラウザで開く')
@@ -303,11 +303,19 @@ class App(tk.Tk):
         self.audit_text.pack(fill='both', expand=True, padx=4, pady=4)
 
         self._action_buttons.extend(
-            [b1, b2, b3, b3w, b3a, b3b, b3c, b4, b5, b6, b6b, b6c, b6d, b6e,
+            [b1, b2, b3, self._btn_proj_wanted, self._btn_proj_minor, self._btn_proj_major, b3c,
+             b4, b5, self._btn_glob_minor, self._btn_glob_major, b6c, b6d, b6e,
              b7, b7b, b8, b9, b10,
              b_exp_osv, b_exp_npm,
              b_tree_refresh, b_tree_expand, b_tree_collapse]
         )
+        # 選択依存ボタン: 起動直後は非選択状態なので全て disable で開始
+        self._install_buttons = (
+            self._btn_proj_wanted, self._btn_proj_minor, self._btn_proj_major,
+            self._btn_glob_minor, self._btn_glob_major,
+        )
+        for btn in self._install_buttons:
+            btn.state(['disabled'])
 
     # ── フィルタバー ──────────────────────────────────────────────────────────
     # (label, internal value) — label は UI 表示用、value は status と対応。
@@ -395,8 +403,16 @@ class App(tk.Tk):
         table.on_render = lambda visible, total: count_label.config(text=f'{visible} / {total}')
 
     # ── 選択時の補助表示 ──────────────────────────────────────────────────────
-    def _on_row_select(self, pkg: dict) -> None:
-        """deprecated パッケージ選択時に message を status に表示。"""
+    def _on_row_select(self, selected: list[dict]) -> None:
+        """選択変化時のフック: install ボタンの状態更新 + deprecated メッセージ表示。
+
+        selected は常に list で渡る (Esc 等で選択 0 件になっても発火する)。
+        """
+        self._refresh_install_buttons()
+        # deprecated メッセージは単一選択時のみ
+        if len(selected) != 1:
+            return
+        pkg = selected[0]
         msg = pkg.get('deprecated') or pkg.get('latestDeprecated')
         if msg:
             tag = 'current' if pkg.get('deprecated') else 'latest'
@@ -452,6 +468,48 @@ class App(tk.Tk):
             for b in self._action_buttons:
                 b.state(['!disabled'])
             self._busy = False
+            # busy で一律 enable に戻ったあと、選択状態に応じて install ボタンを再評価する
+            self._refresh_install_buttons()
+
+    # ── Install ボタン状態 (選択依存) ──────────────────────────────────────
+    def _refresh_install_buttons(self) -> None:
+        """両タブの選択状態を見て各 install ボタンの enable/disable を更新する。
+
+        busy 中は触らない (`_set_busy` が一律 disable しており、解除時に再評価される)。
+        """
+        if self._busy:
+            return
+        self._update_install_state('project', self.project_table.get_selected_all())
+        self._update_install_state('global', self.global_table.get_selected_all())
+
+    def _update_install_state(self, scope: str, selected: list[dict]) -> None:
+        """scope 側の install ボタンを、selected の各行が当該 target に
+        有効な更新候補を持つかで切替える (1 行でも持てば enable)。"""
+        if scope == 'project':
+            specs = [
+                (self._btn_proj_wanted, 'allowedLatest', True),
+                (self._btn_proj_minor, 'latestMinor', False),
+                (self._btn_proj_major, 'latestMajor', False),
+            ]
+        else:
+            specs = [
+                (self._btn_glob_minor, 'latestMinor', False),
+                (self._btn_glob_major, 'latestMajor', False),
+            ]
+        for btn, key, is_wanted in specs:
+            has_any = False
+            for p in selected:
+                v = p.get(key)
+                if is_wanted:
+                    # Wanted: '?' (解釈不能) や current と同じ場合は除外
+                    if v and v != '?' and v != p.get('current'):
+                        has_any = True
+                        break
+                else:
+                    if v:
+                        has_any = True
+                        break
+            btn.state(['!disabled'] if has_any else ['disabled'])
 
     def _post_progress(self, done: int, total: int, label: str) -> None:
         """別スレッドから安全に進捗を反映するためのヘルパ。"""
@@ -632,7 +690,21 @@ class App(tk.Tk):
         def work():
             installed = npm_global.list_global_packages()
             if not installed:
-                return {'packages': [], 'error': 'npm が見つからないか、グローバルパッケージがありません'}
+                # 失敗理由を last_error から拾って具体的なメッセージにする
+                err = npm_global.last_error or {}
+                reason = (err.get('reason') or '').lower()
+                if 'timed out' in reason or 'timeout' in reason:
+                    msg = (
+                        f'`npm list -g` がタイムアウトしました ({err.get("reason")})。'
+                        f'再度リロードしてみてください。続く場合は Debug Log… で詳細確認。'
+                    )
+                elif 'not found' in reason or 'filenotfound' in reason:
+                    msg = 'npm が PATH に見つかりません。Debug Log… を確認してください。'
+                elif reason:
+                    msg = f'npm list -g 失敗: {err.get("reason")} (Debug Log… で詳細)'
+                else:
+                    msg = 'npm が見つからないか、グローバルパッケージがありません'
+                return {'packages': [], 'error': msg}
             # Global は `npm list -g` の結果なので常に installed=True。
             deps = [{
                 'name': p['name'], 'version': p['version'],
