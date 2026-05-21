@@ -99,6 +99,44 @@ VIEW_PRESET_DESCRIPTIONS: dict[str, str] = {
 
 DEFAULT_PRESET = 'Wanted'
 
+# ヘッダ色チップ (PoC): セル単位 background が ttk.Treeview で出来ない代わりに、
+# 列ヘッダ左に小さい色チップ画像を入れて「どのレーンか」を視覚識別する。
+# PhotoImage は GC されると黒化するので PackageTable インスタンスに参照を保持する。
+#   wanted = 緑 (spec 内なので安全)
+#   minor  = 黄 (同 major 内)
+#   major  = 橙 (Breaking の可能性)
+_HEADING_SWATCH_COLORS: dict[str, str] = {
+    'wanted': '#5fbf5f',
+    'minor':  '#e6c440',
+    'major':  '#e08a3c',
+}
+_HEADING_SWATCH_SIZE = 10
+
+
+def _ensure_heading_image_on_left() -> None:
+    """Treeview.Heading の layout を「画像 → text」順 (画像が左) に上書き。
+
+    ttk.Treeview のデフォルト layout (vista テーマ等) は heading の image を
+    text の右側に置くため、color swatch が次の列の手前に並んで見えてしまう。
+    `side='left'` に変更してヘッダ内で「[chip] text」の順になるようにする。
+
+    ttk.Style はプロセスグローバルなので 1 度呼べば両 PackageTable に効く。
+    画像を持たないヘッダ (dep_tree など) には視覚的影響なし。
+    """
+    style = ttk.Style()
+    try:
+        style.layout('Treeview.Heading', [
+            ('Treeview.Heading.cell', {'sticky': 'nswe'}),
+            ('Treeview.Heading.border', {'sticky': 'nswe', 'children': [
+                ('Treeview.Heading.padding', {'sticky': 'nswe', 'children': [
+                    ('Treeview.Heading.image', {'side': 'left', 'sticky': ''}),
+                    ('Treeview.Heading.text', {'sticky': 'we'}),
+                ]}),
+            ]}),
+        ])
+    except tk.TclError:
+        pass  # 一部テーマでは layout 操作不可
+
 
 class PackageTable(ttk.Frame):
     """Package / Current / Wanted / Minor / Major / Age 列 / status / dev / group / license / yanked。
@@ -116,6 +154,9 @@ class PackageTable(ttk.Frame):
         super().__init__(master)
         self.on_select = on_select
         self.on_render = on_render
+
+        # 色チップを text の左に出すため layout を 1 度だけ上書き
+        _ensure_heading_image_on_left()
 
         tree = ttk.Treeview(self, columns=self.COLUMNS, show='headings', selectmode='extended')
         # yanked: 'yes' (現行版 yanked) / 'abnd' (latest も yanked) / ''
@@ -137,8 +178,21 @@ class PackageTable(ttk.Frame):
         }
         right_aligned = {'age_cur', 'age_wnt', 'age_min', 'age_maj'}
         centered = {'dev', 'status', 'yanked'}
+        # ヘッダの色チップ画像を生成 (Wanted/Minor up/Major up 列のみ)。
+        # PhotoImage は参照を失うと黒化するため self に保持。
+        self._heading_swatches: dict[str, tk.PhotoImage] = {}
+        for col_name, color in _HEADING_SWATCH_COLORS.items():
+            img = tk.PhotoImage(master=tree, width=_HEADING_SWATCH_SIZE, height=_HEADING_SWATCH_SIZE)
+            img.put(color, to=(0, 0, _HEADING_SWATCH_SIZE, _HEADING_SWATCH_SIZE))
+            self._heading_swatches[col_name] = img
         for col, (label, width) in headings.items():
-            tree.heading(col, text=label)
+            swatch = self._heading_swatches.get(col)
+            if swatch is not None:
+                # tree.heading は -compound オプション非対応 (column 等と違う API)。
+                # image を渡すとデフォルトで text の左に並ぶのでそれに任せる。
+                tree.heading(col, text=label, image=swatch)
+            else:
+                tree.heading(col, text=label)
             if col in right_aligned:
                 anchor = 'e'
             elif col in centered:
