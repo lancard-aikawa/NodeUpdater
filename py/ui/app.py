@@ -100,12 +100,12 @@ class App(tk.Tk):
         self.notebook.add(self.tab_global, text='Global (pip list)')
         gbar = ttk.Frame(self.tab_global, padding=(4, 4))
         gbar.pack(fill='x')
-        gb1 = ttk.Button(gbar, text='再取得', command=self.refresh_global)
-        ui_tooltip.attach(gb1, 'Refresh: グローバル (現在の python) パッケージ一覧を再取得')
+        gb1 = ttk.Button(gbar, text='リロード', command=self.refresh_global)
+        ui_tooltip.attach(gb1, 'Refresh: グローバル (現在の python) パッケージ一覧をリロード')
         gb1.pack(side='left')
-        gb2 = ttk.Button(gbar, text='強制再取得',
+        gb2 = ttk.Button(gbar, text='強制リロード',
                          command=lambda: self.refresh_global(force=True))
-        ui_tooltip.attach(gb2, 'Force Refresh: cache を無視して再取得')
+        ui_tooltip.attach(gb2, 'Force Refresh: cache を無視してリロード')
         gb2.pack(side='left', padx=(4, 0))
         gb_min = ttk.Button(gbar, text='Minor版に更新…',
                             command=lambda: self._install_selected('global', 'minor'))
@@ -126,7 +126,10 @@ class App(tk.Tk):
                          command=lambda: self._open_selected_pypi('global'))
         ui_tooltip.attach(gb3, 'Open on PyPI: 選択行のパッケージページをブラウザで開く')
         gb3.pack(side='left', padx=(12, 0))
-        self.global_table = PackageTable(self.tab_global)
+        # Global は spec が無いため Wanted 列は意味を持たない。Wanted preset と
+        # 'All' preset 内の wanted/age_wnt 列は VIEW_PRESETS_GLOBAL で除外している。
+        from py.ui.table import VIEW_PRESETS_GLOBAL
+        self.global_table = PackageTable(self.tab_global, presets=VIEW_PRESETS_GLOBAL)
         # Global は spec が無いため Wanted 列は常に空。既定は Latest にしておく。
         self._make_filter_bar(self.tab_global, self.global_table, default_preset='Latest')
         self.global_table.pack(fill='both', expand=True, padx=4, pady=4)
@@ -136,12 +139,12 @@ class App(tk.Tk):
         self.notebook.add(self.tab_project, text='プロジェクト')
         pbar = ttk.Frame(self.tab_project, padding=(4, 4))
         pbar.pack(fill='x')
-        pb1 = ttk.Button(pbar, text='再取得', command=self.refresh_project)
-        ui_tooltip.attach(pb1, 'Refresh: 依存一覧を再取得 (cache 利用)')
+        pb1 = ttk.Button(pbar, text='リロード', command=self.refresh_project)
+        ui_tooltip.attach(pb1, 'Refresh: 依存一覧をリロード (cache 利用)')
         pb1.pack(side='left')
-        pb2 = ttk.Button(pbar, text='強制再取得',
+        pb2 = ttk.Button(pbar, text='強制リロード',
                          command=lambda: self.refresh_project(force=True))
-        ui_tooltip.attach(pb2, 'Force Refresh: cache を無視して再取得')
+        ui_tooltip.attach(pb2, 'Force Refresh: cache を無視してリロード')
         pb2.pack(side='left', padx=(4, 0))
         pb_wnt = ttk.Button(pbar, text='Wanted版で更新…',
                             command=lambda: self._install_selected('project', 'wanted'))
@@ -208,7 +211,7 @@ class App(tk.Tk):
     def _make_filter_bar(
         self, parent, table: PackageTable, default_preset: str = 'Wanted',
     ) -> None:
-        from py.ui.table import VIEW_PRESETS, VIEW_PRESET_DESCRIPTIONS  # local import to avoid module-level coupling
+        from py.ui.table import VIEW_PRESET_DESCRIPTIONS  # local import to avoid module-level coupling
         bar = ttk.Frame(parent, padding=(4, 2))
         bar.pack(fill='x')
 
@@ -235,7 +238,9 @@ class App(tk.Tk):
         # 押すと treeview の displaycolumns だけ切り替わるので一瞬で反映される。
         # 各 radio には hover で説明ツールチップを出す (VIEW_PRESET_DESCRIPTIONS)。
         view_var = tk.StringVar(value=default_preset)
-        for label in reversed(list(VIEW_PRESETS.keys())):
+        # table が自分の presets を持つので、それを基に radio を生成する
+        # (Global は Wanted preset が無いので 3 個になる)。
+        for label in reversed(list(table.presets.keys())):
             # side='right' で並べると逆順で配置されるので reversed する → 結果として左から Wanted/Latest/Audit/All
             rb = ttk.Radiobutton(
                 bar, text=label, value=label, variable=view_var,
@@ -249,7 +254,7 @@ class App(tk.Tk):
         view_label.pack(side='right', padx=(16, 4))
         ui_tooltip.attach(
             view_label,
-            '表示列のプリセットを切替えます。データ再取得は不要で、列の見え方だけ変わります。',
+            '表示列のプリセットを切替えます。データリロードは不要で、列の見え方だけ変わります。',
         )
         table.set_view_preset(default_preset)
 
@@ -322,7 +327,7 @@ class App(tk.Tk):
         except (TypeError, ValueError):
             days = 7
         state.set_cooldown_days(days)
-        self._set_status(f'Cooldown を {days} 日に設定 (再取得で反映)')
+        self._set_status(f'Cooldown を {days} 日に設定 (リロードで反映)')
 
     def _cooldown(self) -> int:
         try:
@@ -479,7 +484,7 @@ class App(tk.Tk):
         if payload.get('error'):
             self._set_status(payload['error'], color='#a60')
         else:
-            self._set_status('cache から読込' if from_cache else '再取得完了')
+            self._set_status('cache から読込' if from_cache else 'リロード完了')
         table.set_packages(payload.get('packages', []))
 
     # ── OSV ─────────────────────────────────────────────────────────────
@@ -601,7 +606,7 @@ class App(tk.Tk):
         """プロジェクトに未導入のパッケージを cooldown 適用後の版で追加。
 
         PM は uv.lock / poetry.lock / Pipfile から検出 (uv add / poetry add / pip install)。
-        uv add / poetry add は pyproject.toml も書き換えるため、再取得で
+        uv add / poetry add は pyproject.toml も書き換えるため、リロードで
         Wanted/Latest が変わる可能性がある。
         """
         if not self.current_project:

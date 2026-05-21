@@ -135,11 +135,11 @@ class App(tk.Tk):
         self.notebook.add(self.tab_global, text='Global (npm -g)')
         global_bar = ttk.Frame(self.tab_global, padding=(4, 4))
         global_bar.pack(fill='x')
-        b4 = ttk.Button(global_bar, text='再取得', command=self.refresh_global)
-        ui_tooltip.attach(b4, 'Refresh: グローバルパッケージ一覧を再取得 (cache 利用)')
+        b4 = ttk.Button(global_bar, text='リロード', command=self.refresh_global)
+        ui_tooltip.attach(b4, 'Refresh: グローバルパッケージ一覧をリロード (cache 利用)')
         b4.pack(side='left')
-        b5 = ttk.Button(global_bar, text='強制再取得', command=lambda: self.refresh_global(force=True))
-        ui_tooltip.attach(b5, 'Force Refresh: cache を無視して再取得')
+        b5 = ttk.Button(global_bar, text='強制リロード', command=lambda: self.refresh_global(force=True))
+        ui_tooltip.attach(b5, 'Force Refresh: cache を無視してリロード')
         b5.pack(side='left', padx=(4, 0))
         b6 = ttk.Button(global_bar, text='Minor版に更新…',
                         command=lambda: self._install_selected('global', 'minor'))
@@ -164,8 +164,12 @@ class App(tk.Tk):
                          command=lambda: self._show_changelog('global'))
         ui_tooltip.attach(b6d, 'Changelog…: GitHub Releases から変更履歴を取得')
         b6d.pack(side='left', padx=(4, 0))
-        self.global_table = PackageTable(self.tab_global, on_select=self._on_row_select)
-        # Global は spec が無いため Wanted 列は常に空。既定は Latest にしておく。
+        # Global は spec が無いため Wanted 列は意味を持たない。Wanted preset と
+        # 'All' preset 内の wanted/age_wnt 列は VIEW_PRESETS_GLOBAL で除外している。
+        from node.ui.table import VIEW_PRESETS_GLOBAL
+        self.global_table = PackageTable(
+            self.tab_global, on_select=self._on_row_select, presets=VIEW_PRESETS_GLOBAL,
+        )
         self._make_filter_bar(
             self.tab_global, self.global_table, key='global', default_preset='Latest',
         )
@@ -176,11 +180,11 @@ class App(tk.Tk):
         self.notebook.add(self.tab_project, text='プロジェクト')
         project_bar = ttk.Frame(self.tab_project, padding=(4, 4))
         project_bar.pack(fill='x')
-        b1 = ttk.Button(project_bar, text='再取得', command=self.refresh_project)
-        ui_tooltip.attach(b1, 'Refresh: 依存一覧を再取得 (cache 利用)')
+        b1 = ttk.Button(project_bar, text='リロード', command=self.refresh_project)
+        ui_tooltip.attach(b1, 'Refresh: 依存一覧をリロード (cache 利用)')
         b1.pack(side='left')
-        b2 = ttk.Button(project_bar, text='強制再取得', command=lambda: self.refresh_project(force=True))
-        ui_tooltip.attach(b2, 'Force Refresh: cache を無視して再取得')
+        b2 = ttk.Button(project_bar, text='強制リロード', command=lambda: self.refresh_project(force=True))
+        ui_tooltip.attach(b2, 'Force Refresh: cache を無視してリロード')
         b2.pack(side='left', padx=(4, 0))
         b3w = ttk.Button(project_bar, text='Wanted版で更新…',
                          command=lambda: self._install_selected('project', 'wanted'))
@@ -225,7 +229,7 @@ class App(tk.Tk):
         self.notebook.add(self.tab_tree, text='依存ツリー')
         tree_bar = ttk.Frame(self.tab_tree, padding=(4, 4))
         tree_bar.pack(fill='x')
-        b_tree_refresh = ttk.Button(tree_bar, text='再取得', command=self.refresh_tree)
+        b_tree_refresh = ttk.Button(tree_bar, text='リロード', command=self.refresh_tree)
         ui_tooltip.attach(b_tree_refresh, 'Refresh: package-lock.json から依存ツリーを再構築')
         b_tree_refresh.pack(side='left')
         b_tree_expand = ttk.Button(tree_bar, text='全展開', command=self._tree_expand_all)
@@ -326,7 +330,7 @@ class App(tk.Tk):
 
         default_preset で View プリセットの初期値を指定 (Global は spec が無いので Latest 推奨)。
         """
-        from node.ui.table import VIEW_PRESETS, VIEW_PRESET_DESCRIPTIONS  # local import
+        from node.ui.table import VIEW_PRESET_DESCRIPTIONS  # local import
         bar = ttk.Frame(parent, padding=(4, 2))
         bar.pack(fill='x')
 
@@ -350,8 +354,10 @@ class App(tk.Tk):
         count_label.pack(side='right')
 
         # View プリセット radio (列が多いので task 別に切替える)
+        # table が自分の presets を持つので、それを基に radio を生成する
+        # (Global は Wanted preset が無いので 3 個になる)。
         view_var = tk.StringVar(value=default_preset)
-        for label in reversed(list(VIEW_PRESETS.keys())):
+        for label in reversed(list(table.presets.keys())):
             rb = ttk.Radiobutton(
                 bar, text=label, value=label, variable=view_var,
                 command=lambda l=label: table.set_view_preset(l),
@@ -364,7 +370,7 @@ class App(tk.Tk):
         view_label.pack(side='right', padx=(16, 4))
         ui_tooltip.attach(
             view_label,
-            '表示列のプリセットを切替えます。データ再取得は不要で、列の見え方だけ変わります。',
+            '表示列のプリセットを切替えます。データリロードは不要で、列の見え方だけ変わります。',
         )
         table.set_view_preset(default_preset)
 
@@ -420,7 +426,7 @@ class App(tk.Tk):
         except (TypeError, ValueError):
             days = 7
         state.set_cooldown_days(days)
-        self._set_status(f'Cooldown を {days} 日に設定 (再取得で反映)')
+        self._set_status(f'Cooldown を {days} 日に設定 (リロードで反映)')
 
     def _cooldown(self) -> int:
         try:
@@ -607,7 +613,7 @@ class App(tk.Tk):
 
     def _render_project(self, payload: dict, from_cache: bool) -> None:
         self.project_table.set_packages(payload.get('packages', []))
-        self._set_status('cache から読込' if from_cache else '再取得完了')
+        self._set_status('cache から読込' if from_cache else 'リロード完了')
 
     def refresh_global(self, force: bool = False) -> None:
         # 切替直後に旧データが残らないよう一旦空にする (refresh_project と同じ理由)。
@@ -660,7 +666,7 @@ class App(tk.Tk):
         if payload.get('error'):
             self._set_status(payload['error'], color='#a60')
         else:
-            self._set_status('cache から読込' if from_cache else '再取得完了')
+            self._set_status('cache から読込' if from_cache else 'リロード完了')
         self.global_table.set_packages(payload.get('packages', []))
 
     def run_osv(self, force: bool = False) -> None:
@@ -1010,7 +1016,7 @@ class App(tk.Tk):
             return
         try:
             npm_global.open_command_prompt(cmd, cwd=str(self.current_project))
-            self._set_status(f'別 console で実行中: {cmd}  (完了後 再取得)')
+            self._set_status(f'別 console で実行中: {cmd}  (完了後 リロード)')
         except OSError as e:
             messagebox.showerror('NodeUpdater', f'プロンプトの起動に失敗しました\n\n{e}')
 

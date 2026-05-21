@@ -66,12 +66,23 @@ _HEADER_TOOLTIPS: dict[str, str] = {
 
 # 列構成プリセット。列定義 (COLUMNS) はそのまま、displaycolumns で表示分のみ切替。
 # 用途別に必要な列だけを並べる。'All' はトラブルシュート用の全展開。
+# Project タブ用 (spec があるので Wanted 列が意味を持つ)。
 VIEW_PRESETS: dict[str, tuple[str, ...]] = {
     'Wanted': ('name', 'current', 'wanted', 'age_wnt', 'status', 'group', 'dev'),
     'Latest': ('name', 'current', 'age_cur', 'minor', 'age_min', 'major', 'age_maj', 'status'),
     'Audit':  ('name', 'current', 'license', 'yanked', 'dev', 'group'),
     'All':    ('name', 'current', 'age_cur',
                'wanted', 'age_wnt',
+               'minor', 'age_min', 'major', 'age_maj',
+               'status', 'dev', 'group', 'license', 'yanked'),
+}
+
+# Global タブ用 (`pip list` の結果には spec が無いので Wanted を非表示)。
+# Wanted preset 自体を外し、All からも wanted/age_wnt を除外する。
+VIEW_PRESETS_GLOBAL: dict[str, tuple[str, ...]] = {
+    'Latest': ('name', 'current', 'age_cur', 'minor', 'age_min', 'major', 'age_maj', 'status'),
+    'Audit':  ('name', 'current', 'license', 'yanked', 'dev', 'group'),
+    'All':    ('name', 'current', 'age_cur',
                'minor', 'age_min', 'major', 'age_maj',
                'status', 'dev', 'group', 'license', 'yanked'),
 }
@@ -150,10 +161,13 @@ class PackageTable(ttk.Frame):
                'minor', 'age_min', 'major', 'age_maj',
                'status', 'dev', 'group', 'license', 'yanked')
 
-    def __init__(self, master, on_select=None, on_render=None):
+    def __init__(self, master, on_select=None, on_render=None, presets=None):
         super().__init__(master)
         self.on_select = on_select
         self.on_render = on_render
+        # presets が None なら module 既定 (Project 用 VIEW_PRESETS) を使う。
+        # Global タブは VIEW_PRESETS_GLOBAL を渡して Wanted を非表示にする。
+        self.presets: dict[str, tuple[str, ...]] = presets if presets is not None else VIEW_PRESETS
 
         # 色チップを text の左に出すため layout を 1 度だけ上書き
         _ensure_heading_image_on_left()
@@ -235,9 +249,11 @@ class PackageTable(ttk.Frame):
     def set_view_preset(self, name: str) -> None:
         """表示列セットを切替える。COLUMNS は維持し displaycolumns だけ変える。
 
-        無効な name が来た場合は DEFAULT_PRESET にフォールバック。
+        不明な preset 名のフォールバック: 自テーブルの最初の preset を採用。
         """
-        cols = VIEW_PRESETS.get(name) or VIEW_PRESETS[DEFAULT_PRESET]
+        cols = self.presets.get(name)
+        if cols is None:
+            cols = next(iter(self.presets.values()), self.COLUMNS)
         self.tree.configure(displaycolumns=cols)
 
     @staticmethod
