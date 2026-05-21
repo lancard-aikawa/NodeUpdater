@@ -1,6 +1,6 @@
 @echo off
-REM PkgUpdater 一括ビルド: NodeUpdater.exe と PypkgUpdater.exe を順に生成。
-REM 事前に: py -m pip install --user pyinstaller
+REM Build both NodeUpdater.exe and PypkgUpdater.exe (PkgUpdater umbrella build).
+REM Prerequisite: py -m pip install --user pyinstaller
 
 setlocal
 cd /d "%~dp0"

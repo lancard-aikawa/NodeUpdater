@@ -175,3 +175,124 @@ def pick_latest_minor_and_major(
         latest_major = overall_latest
 
     return latest_minor, latest_major
+
+
+# ── PEP 440 specifier matcher (Section 4: Version specifiers) ──────────────
+# 「requirements の規約を尊重した最高版」を計算するため。
+# サポート: == ~= != >= <= > < / カンマで AND。
+# 部分対応: ==X.Y.* (prefix wildcard)。`===` は exact 文字列一致として扱う。
+# 未対応: arbitrary equality 以外の URL/local-version 細部、`!=X.*` の prefix 否定。
+# pre-release は PEP 440 §6 簡易ルール: spec 内に pre-release 表記が無ければ除外。
+
+_OP_TARGET_RE = re.compile(
+    r'^\s*(?P<op>===|==|~=|!=|>=|<=|>|<)\s*(?P<target>\S+?)\s*$'
+)
+
+
+def _canonical_release(release: tuple[int, ...]) -> tuple[int, ...]:
+    """PEP 440 == 比較用に release tuple の末尾の 0 を取り除く。
+
+    (1, 0, 0) と (1,) は同じ release を表すとみなす。
+    """
+    out = list(release)
+    while len(out) > 1 and out[-1] == 0:
+        out.pop()
+    return tuple(out)
+
+
+def _exact_equal(v: 'Version', t: 'Version') -> bool:
+    if _canonical_release(v.release) != _canonical_release(t.release):
+        return False
+    return v.pre == t.pre and v.post == t.post and v.dev == t.dev
+
+
+def _matches_clause(v: 'Version', op: str, target_str: str) -> bool:
+    """1 個の clause (op, target) の判定。target_str は `1.2.*` の wildcard も許容。"""
+    # ==X.Y.* (prefix match) は op == '==' のときだけ有効
+    if op == '==' and target_str.endswith('.*'):
+        prefix_str = target_str[:-2]
+        prefix = parse(prefix_str)
+        if not prefix:
+            return False
+        plen = len(prefix.release)
+        return v.release[:plen] == prefix.release
+
+    target = parse(target_str)
+    if not target:
+        return False
+
+    if op in ('==', '==='):
+        return _exact_equal(v, target)
+    if op == '!=':
+        return not _exact_equal(v, target)
+    if op == '~=':
+        # ~=X.Y.Z は (>=X.Y.Z, <X.(Y+1)) と等価。最低 2 セグメント必要。
+        if len(target.release) < 2:
+            return False
+        if v.__lt__(target):
+            return False
+        prefix = target.release[:-1]
+        return v.release[:len(prefix)] == prefix
+    if op == '>=':
+        return not v.__lt__(target)
+    if op == '<=':
+        return v.__lt__(target) or _exact_equal(v, target)
+    if op == '>':
+        return target.__lt__(v) and not _exact_equal(v, target)
+    if op == '<':
+        return v.__lt__(target)
+    return False
+
+
+def matches_specifier(version: str | None, spec: str | None) -> bool:
+    """version が spec を満たすか。spec は PEP 440 specifier (AND 結合は ',')。
+
+    spec が空 or 未対応の場合 False を返す (false-negative 寄り)。
+    pre-release 除外: spec 内に pre-release が無く v が pre-release なら False。
+    """
+    if not version or not spec:
+        return False
+    v = parse(version)
+    if not v:
+        return False
+    clauses: list[tuple[str, str]] = []
+    for chunk in spec.split(','):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        m = _OP_TARGET_RE.match(chunk)
+        if not m:
+            return False  # 未対応な記法 (URL / local など) は match させない
+        clauses.append((m.group('op'), m.group('target')))
+    if not clauses:
+        return False
+
+    # Pre-release exclusion (PEP 440 §6 簡易): spec に pre が無ければ pre を弾く
+    if v.is_prerelease:
+        spec_has_pre = False
+        for _, target_str in clauses:
+            t = parse(target_str.removesuffix('.*'))
+            if t and t.is_prerelease:
+                spec_has_pre = True
+                break
+        if not spec_has_pre:
+            return False
+
+    return all(_matches_clause(v, op, target_str) for op, target_str in clauses)
+
+
+def latest_matching(all_versions: list[str], spec: str | None) -> str | None:
+    """spec を満たす最高安定版を返す。spec が空 / 全部 mismatch なら None。"""
+    if not spec:
+        return None
+    parsed: list[tuple[str, Version]] = []
+    for v in all_versions:
+        if not matches_specifier(v, spec):
+            continue
+        p = parse(v)
+        if p:
+            parsed.append((v, p))
+    if not parsed:
+        return None
+    parsed.sort(key=lambda t: t[1], reverse=True)
+    return parsed[0][0]

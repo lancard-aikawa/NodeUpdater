@@ -12,9 +12,12 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from shared import cache, osv, state, ui_tabs
+from shared import cache, history, osv, state, ui_tabs, ui_tooltip
+from shared.install_dialog import InstallDialog
 
-from py.core import pep440, pip_global, pypi, pyproject
+from py.core import (
+    pep440, pip_global, pkg_manager, pypi, pyproject, requirements_writer,
+)
 
 from .table import PackageTable
 
@@ -83,11 +86,18 @@ class App(tk.Tk):
         gb2 = ttk.Button(gbar, text='Force Refresh',
                          command=lambda: self.refresh_global(force=True))
         gb2.pack(side='left', padx=(4, 0))
+        gb_min = ttk.Button(gbar, text='Install Minor Up…',
+                            command=lambda: self._install_selected('global', 'minor'))
+        gb_min.pack(side='left', padx=(12, 0))
+        gb_maj = ttk.Button(gbar, text='Install Major Up…',
+                            command=lambda: self._install_selected('global', 'major'))
+        gb_maj.pack(side='left', padx=(4, 0))
         gb3 = ttk.Button(gbar, text='Open on PyPI',
                          command=lambda: self._open_selected_pypi('global'))
         gb3.pack(side='left', padx=(12, 0))
         self.global_table = PackageTable(self.tab_global)
-        self._make_filter_bar(self.tab_global, self.global_table)
+        # Global は spec が無いため Wanted 列は常に空。既定は Latest にしておく。
+        self._make_filter_bar(self.tab_global, self.global_table, default_preset='Latest')
         self.global_table.pack(fill='both', expand=True, padx=4, pady=4)
 
         # Project tab
@@ -100,6 +110,15 @@ class App(tk.Tk):
         pb2 = ttk.Button(pbar, text='Force Refresh',
                          command=lambda: self.refresh_project(force=True))
         pb2.pack(side='left', padx=(4, 0))
+        pb_wnt = ttk.Button(pbar, text='Install Wanted…',
+                            command=lambda: self._install_selected('project', 'wanted'))
+        pb_wnt.pack(side='left', padx=(12, 0))
+        pb_min = ttk.Button(pbar, text='Install Minor Up…',
+                            command=lambda: self._install_selected('project', 'minor'))
+        pb_min.pack(side='left', padx=(4, 0))
+        pb_maj = ttk.Button(pbar, text='Install Major Up…',
+                            command=lambda: self._install_selected('project', 'major'))
+        pb_maj.pack(side='left', padx=(4, 0))
         pb3 = ttk.Button(pbar, text='Open on PyPI',
                          command=lambda: self._open_selected_pypi('project'))
         pb3.pack(side='left', padx=(12, 0))
@@ -120,7 +139,11 @@ class App(tk.Tk):
         self.audit_text = tk.Text(self.tab_audit, wrap='none', height=20)
         self.audit_text.pack(fill='both', expand=True, padx=4, pady=4)
 
-        self._action_buttons.extend([gb1, gb2, gb3, pb1, pb2, pb3, ab1, ab2])
+        self._action_buttons.extend([
+            gb1, gb2, gb_min, gb_maj, gb3,
+            pb1, pb2, pb_wnt, pb_min, pb_maj, pb3,
+            ab1, ab2,
+        ])
 
     # ── フィルタバー ──────────────────────────────────────────────────────────
     _STATUS_OPTIONS = [
@@ -133,7 +156,10 @@ class App(tk.Tk):
         ('Unknown', 'unknown'),
     ]
 
-    def _make_filter_bar(self, parent, table: PackageTable) -> None:
+    def _make_filter_bar(
+        self, parent, table: PackageTable, default_preset: str = 'Wanted',
+    ) -> None:
+        from py.ui.table import VIEW_PRESETS, VIEW_PRESET_DESCRIPTIONS  # local import to avoid module-level coupling
         bar = ttk.Frame(parent, padding=(4, 2))
         bar.pack(fill='x')
 
@@ -155,6 +181,28 @@ class App(tk.Tk):
 
         count_label = ttk.Label(bar, text='', foreground='#666')
         count_label.pack(side='right')
+
+        # View プリセット radio: 列が多いので task 別に切替える。
+        # 押すと treeview の displaycolumns だけ切り替わるので一瞬で反映される。
+        # 各 radio には hover で説明ツールチップを出す (VIEW_PRESET_DESCRIPTIONS)。
+        view_var = tk.StringVar(value=default_preset)
+        for label in reversed(list(VIEW_PRESETS.keys())):
+            # side='right' で並べると逆順で配置されるので reversed する → 結果として左から Wanted/Latest/Audit/All
+            rb = ttk.Radiobutton(
+                bar, text=label, value=label, variable=view_var,
+                command=lambda l=label: table.set_view_preset(l),
+            )
+            rb.pack(side='right')
+            desc = VIEW_PRESET_DESCRIPTIONS.get(label)
+            if desc:
+                ui_tooltip.attach(rb, desc)
+        view_label = ttk.Label(bar, text='View:', foreground='#666')
+        view_label.pack(side='right', padx=(16, 4))
+        ui_tooltip.attach(
+            view_label,
+            '表示列のプリセットを切替えます。データ再取得は不要で、列の見え方だけ変わります。',
+        )
+        table.set_view_preset(default_preset)
 
         def label_to_status(label: str) -> str | None:
             for lab, val in self._STATUS_OPTIONS:
@@ -295,7 +343,7 @@ class App(tk.Tk):
             def on_prog(done_count, total):
                 self._post_progress(done_count, total, 'Fetching from PyPI')
             infos = pypi.fetch_many(
-                [(d['name'], d['version']) for d in deps],
+                [(d['name'], d['version'], d.get('spec')) for d in deps],
                 on_progress=on_prog,
                 cooldown_days=cooldown,
             )
@@ -452,6 +500,108 @@ class App(tk.Tk):
             return
         webbrowser.open(f'https://pypi.org/project/{pkg["name"]}/')
 
+    # ── Install (uv add / poetry add / pip install -U) ──────────────────
+    def _install_selected(self, scope: str, target: str) -> None:
+        """scope: 'project' | 'global'   target: 'minor' | 'major'
+
+        複数選択時は 1 つの install コマンドにまとめて起動する。
+        対象更新が無いパッケージはスキップして確認ダイアログで通知。
+        """
+        table = self.project_table if scope == 'project' else self.global_table
+        selected = table.get_selected_all()
+        if not selected:
+            messagebox.showinfo('PypkgUpdater', 'Select one or more packages first.')
+            return
+        if scope == 'project' and not self.current_project:
+            messagebox.showinfo('PypkgUpdater', 'Choose a project first.')
+            return
+
+        # target:
+        #   'wanted' = requirements の spec が許す最高版 (Wanted 列の値)
+        #   'minor'  = 同 major 内の最高 (spec 無視)
+        #   'major'  = より上の major (spec 無視)
+        # 'wanted' は current と一致する (= 既に上限) ものをスキップする。
+        key_map = {'wanted': 'allowedLatest', 'minor': 'latestMinor', 'major': 'latestMajor'}
+        key = key_map.get(target, 'latestMinor')
+        targets, skipped = [], []
+        for p in selected:
+            v = p.get(key)
+            if v and (target != 'wanted' or v != p.get('current')):
+                targets.append((p['name'], v))
+            else:
+                skipped.append(p['name'])
+
+        if not targets:
+            label_map = {
+                'wanted': 'Wanted (within spec)',
+                'minor': 'Minor (same major)',
+                'major': 'Major up',
+            }
+            label = label_map.get(target, target)
+            messagebox.showinfo(
+                'PypkgUpdater',
+                f'選択された {len(selected)} 件すべてに {label} の更新候補はありません。',
+            )
+            return
+
+        is_global = (scope == 'global')
+        cwd = None if is_global else str(self.current_project)
+        # PyPI spec: `name==version`。pip / uv / poetry / pipenv で共通記法。
+        specs = [f'{n}=={v}' for n, v in targets]
+        pm = 'pip' if is_global else pkg_manager.detect(self.current_project)
+        target_label = {
+            'wanted': 'Install Wanted (within spec)',
+            'minor': 'Install Minor Up',
+            'major': 'Install Major Up',
+        }.get(target, target)
+
+        from_versions = {p['name']: p.get('current') for p in selected}
+
+        dialog = InstallDialog(
+            self,
+            title_label=target_label,
+            specs=specs,
+            skipped=skipped,
+            cwd=cwd,
+            global_install=is_global,
+            pm=pm,
+            pkg_manager=pkg_manager,
+        )
+        self.wait_window(dialog)
+        if dialog.result != 'install':
+            return
+
+        # pip プロジェクトでは pyproject.toml / lock の自動書き換えが無いので、
+        # requirements*.txt の operator スタイルを保ったまま version を同期する。
+        # uv / poetry は uv add / poetry add 側がファイルを書き換えるため skip。
+        req_summary = ''
+        if pm == 'pip' and not is_global and self.current_project:
+            update_map = {name: ver for name, ver in targets}
+            rewrite_results = requirements_writer.rewrite_in_project(
+                self.current_project, update_map,
+            )
+            if rewrite_results:
+                req_summary = ' | requirements: ' + requirements_writer.summarize(rewrite_results)
+
+        cmd = pkg_manager.install_command(pm, specs, global_install=is_global)
+        try:
+            pip_global.open_command_prompt(cmd, cwd=cwd)
+            self._set_status(
+                f'Opened prompt [{pm}]: install {len(specs)} package(s) '
+                f'({"global" if is_global else "project"})' + req_summary
+            )
+            # 履歴記録 (プロジェクトスコープのみ。global は記録先プロジェクトが無いため除外)
+            if not is_global and self.current_project:
+                history.append(
+                    project_path=str(self.current_project),
+                    pm=pm,
+                    scope=scope,
+                    specs=specs,
+                    from_versions=from_versions,
+                )
+        except OSError as e:
+            messagebox.showerror('PypkgUpdater', f'プロンプトの起動に失敗しました\n\n{e}')
+
 
 def _is_py_project(path: str) -> bool:
     """Python プロジェクトの判定: pyproject.toml か requirements.txt がルートにあれば対象。
@@ -477,9 +627,11 @@ def _build_package_list(deps: list[dict], infos: dict[str, dict]) -> list[dict]:
         out.append({
             'name': d['name'],
             'current': d.get('version'),
+            'spec': d.get('spec'),
             'latest': latest,
             'latestMinor': latest_minor,
             'latestMajor': latest_major,
+            'allowedLatest': info.get('allowedLatest'),
             'status': status,
             'dev': d.get('dev', False),
             'group': d.get('group'),
@@ -487,9 +639,11 @@ def _build_package_list(deps: list[dict], infos: dict[str, dict]) -> list[dict]:
             'latestPublishedAt': info.get('latestPublishedAt'),
             'latestMinorPublishedAt': info.get('latestMinorPublishedAt'),
             'latestMajorPublishedAt': info.get('latestMajorPublishedAt'),
+            'allowedLatestPublishedAt': info.get('allowedLatestPublishedAt'),
             'currentAgeInDays': info.get('currentAgeInDays'),
             'latestMinorAgeInDays': info.get('latestMinorAgeInDays'),
             'latestMajorAgeInDays': info.get('latestMajorAgeInDays'),
+            'allowedLatestAgeInDays': info.get('allowedLatestAgeInDays'),
             'deprecated': info.get('deprecated'),
             'latestDeprecated': info.get('latestDeprecated'),
             'license': info.get('license'),

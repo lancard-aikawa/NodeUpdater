@@ -80,6 +80,7 @@ def _collect_from_list(
         out.append({
             'name': name,
             'version': _normalize_spec(spec),
+            'spec': spec or None,  # 生の operator chain (例 '>=2.0,<3') を Wanted 計算用に保持
             'dev': dev,
             'group': group,
         })
@@ -99,6 +100,7 @@ def _collect_from_poetry(deps: dict, dev: bool, group: str | None, out: list[dic
         out.append({
             'name': name,
             'version': _normalize_spec(spec),
+            'spec': spec or None,
             'dev': dev,
             'group': group,
         })
@@ -178,6 +180,7 @@ def collect_from_requirements(
             out.append({
                 'name': name,
                 'version': _normalize_spec(spec),
+                'spec': spec or None,
                 'dev': dev,
                 'group': None,
             })

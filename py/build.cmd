@@ -1,8 +1,8 @@
 @echo off
-REM PyInstaller で PypkgUpdater.exe を単一ファイルにビルド。
-REM 事前に: py -m pip install --user pyinstaller
+REM Build PypkgUpdater.exe as a single file via PyInstaller.
+REM Prerequisite: py -m pip install --user pyinstaller
 REM
-REM リポジトリルートを cwd にしてビルドする (shared/ など他パッケージを解決するため)。
+REM Run from repository root so that shared/ and py/ packages resolve.
 
 setlocal
 cd /d "%~dp0\.."

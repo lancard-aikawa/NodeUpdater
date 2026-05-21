@@ -18,11 +18,52 @@ _STATUS_COLORS = {
 
 _STATUS_ORDER = {'both': 0, 'major': 1, 'minor': 2, 'unknown': 3, 'latest': 4}
 
+# 列構成プリセット。列定義 (COLUMNS) はそのまま、displaycolumns で表示分のみ切替。
+# 用途別に必要な列だけを並べる。'All' はトラブルシュート用の全展開。
+VIEW_PRESETS: dict[str, tuple[str, ...]] = {
+    'Wanted': ('name', 'current', 'wanted', 'age_wnt', 'status', 'group', 'dev'),
+    'Latest': ('name', 'current', 'age_cur', 'minor', 'age_min', 'major', 'age_maj', 'status'),
+    'Audit':  ('name', 'current', 'license', 'yanked', 'dev', 'group'),
+    'All':    ('name', 'current', 'age_cur',
+               'wanted', 'age_wnt',
+               'minor', 'age_min', 'major', 'age_maj',
+               'status', 'dev', 'group', 'license', 'yanked'),
+}
+
+# 各プリセットの説明 (ツールチップ用)。Project / Global で同じ文面を共有。
+VIEW_PRESET_DESCRIPTIONS: dict[str, str] = {
+    'Wanted': (
+        'spec が許す最高安定版 (Wanted) を中心に表示。\n'
+        '`==1.0` のような pin は Wanted 空欄 (上げ余地なし)。\n'
+        '日常運用向け。Global タブでは spec が無いので Wanted は常に空。'
+    ),
+    'Latest': (
+        'spec を無視した「同 major 内最新 (Minor up)」と「次 major (Major up)」を表示。\n'
+        'spec を見直して大きく上げる時用。'
+    ),
+    'Audit': (
+        'License / yanked / dev / group を表示。\n'
+        'ライセンス棚卸し・非推奨 (yanked) パッケージ確認用。'
+    ),
+    'All': (
+        '全 14 列を展開。\n'
+        '画面幅によっては横スクロールが出ます。トラブルシュート用。'
+    ),
+}
+
+DEFAULT_PRESET = 'Wanted'
+
 
 class PackageTable(ttk.Frame):
-    """Package / Current / Minor / Major / Age 列 / status / dev / group / license / yanked。"""
+    """Package / Current / Wanted / Minor / Major / Age 列 / status / dev / group / license / yanked。
 
-    COLUMNS = ('name', 'current', 'age_cur', 'minor', 'age_min', 'major', 'age_maj',
+    Wanted 列は requirements.txt / pyproject.toml の spec を満たす最高安定版。
+    spec が無い行 (Global タブ / bare name) では空欄。
+    """
+
+    COLUMNS = ('name', 'current', 'age_cur',
+               'wanted', 'age_wnt',
+               'minor', 'age_min', 'major', 'age_maj',
                'status', 'dev', 'group', 'license', 'yanked')
 
     def __init__(self, master, on_select=None, on_render=None):
@@ -33,9 +74,11 @@ class PackageTable(ttk.Frame):
         tree = ttk.Treeview(self, columns=self.COLUMNS, show='headings', selectmode='extended')
         # yanked: 'yes' (現行版 yanked) / 'abnd' (latest も yanked) / ''
         headings = {
-            'name':    ('Package',          240),
-            'current': ('Current',           90),
+            'name':    ('Package',          220),
+            'current': ('Current',           80),
             'age_cur': ('Cur age',           55),
+            'wanted':  ('Wanted',            90),
+            'age_wnt': ('Wnt age',           55),
             'minor':   ('Minor up',          90),
             'age_min': ('Min age',           55),
             'major':   ('Major up',          90),
@@ -43,10 +86,10 @@ class PackageTable(ttk.Frame):
             'status':  ('Status',            70),
             'dev':     ('dev',               40),
             'group':   ('Group',             80),
-            'license': ('License',          110),
+            'license': ('License',          100),
             'yanked':  ('yank',              45),
         }
-        right_aligned = {'age_cur', 'age_min', 'age_maj'}
+        right_aligned = {'age_cur', 'age_wnt', 'age_min', 'age_maj'}
         centered = {'dev', 'status', 'yanked'}
         for col, (label, width) in headings.items():
             tree.heading(col, text=label)
@@ -75,6 +118,16 @@ class PackageTable(ttk.Frame):
         self._filter_query = ''
         self._filter_status: str | None = None
         self._filter_dev_only = False
+        # 初期プリセット (App から set_view_preset で上書きされる想定)
+        self.set_view_preset(DEFAULT_PRESET)
+
+    def set_view_preset(self, name: str) -> None:
+        """表示列セットを切替える。COLUMNS は維持し displaycolumns だけ変える。
+
+        無効な name が来た場合は DEFAULT_PRESET にフォールバック。
+        """
+        cols = VIEW_PRESETS.get(name) or VIEW_PRESETS[DEFAULT_PRESET]
+        self.tree.configure(displaycolumns=cols)
 
     @staticmethod
     def _age_text(days) -> str:
@@ -129,10 +182,17 @@ class PackageTable(ttk.Frame):
         for p in self._all_packages:
             if not self._matches_filter(p):
                 continue
+            wanted = p.get('allowedLatest')
+            current = p.get('current')
+            # Wanted == Current の時は冗長なので空欄に (= 上げ余地なし)
+            wanted_display = wanted if wanted and wanted != current else ''
+            wanted_age = self._age_text(p.get('allowedLatestAgeInDays')) if wanted_display else ''
             iid = self.tree.insert('', 'end', values=(
                 p.get('name', ''),
-                p.get('current') or '-',
+                current or '-',
                 self._age_text(p.get('currentAgeInDays')),
+                wanted_display,
+                wanted_age,
                 p.get('latestMinor') or '',
                 self._age_text(p.get('latestMinorAgeInDays')),
                 p.get('latestMajor') or '',

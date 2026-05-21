@@ -3,14 +3,18 @@
 ユーザーは確認前に Dry-run を実行して影響範囲 (追加/更新されるパッケージ、
 警告など) を見てから本実行できる。Install ボタンで従来通り新規 cmd
 プロンプトを起動して進捗が残るようにする。
+
+ecosystem 中立: pkg_manager (npm/yarn/pnpm/bun または pip/uv/poetry/pipenv)
+を構築時に渡すモジュールから取得する。インターフェース要件は以下:
+  install_command(pm, specs, global_install=, dry_run=) -> str
+  run_dry_run(pm, specs, cwd=, global_install=, timeout=) -> (stdout, stderr, rc)
 """
 from __future__ import annotations
 
 import threading
 import tkinter as tk
 from tkinter import ttk
-
-from node.core import pkg_manager
+from typing import Any
 
 
 class InstallDialog(tk.Toplevel):
@@ -23,6 +27,7 @@ class InstallDialog(tk.Toplevel):
         cwd: str | None,
         global_install: bool,
         pm: str,
+        pkg_manager: Any,
     ):
         super().__init__(master)
         self.title('Install Preview')
@@ -35,6 +40,7 @@ class InstallDialog(tk.Toplevel):
         self.cwd = cwd
         self.global_install = global_install
         self.pm = pm
+        self.pkg_manager = pkg_manager
 
         install_cmd = pkg_manager.install_command(pm, specs, global_install=global_install)
         dry_cmd = pkg_manager.install_command(
@@ -104,7 +110,7 @@ class InstallDialog(tk.Toplevel):
         self._set_text('Running dry-run...\n')
 
         def work():
-            stdout, stderr, rc = pkg_manager.run_dry_run(
+            stdout, stderr, rc = self.pkg_manager.run_dry_run(
                 self.pm, self.specs, cwd=self.cwd, global_install=self.global_install,
             )
             self.after(0, lambda: self._show_result(stdout, stderr, rc))

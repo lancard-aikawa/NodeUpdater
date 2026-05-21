@@ -26,9 +26,10 @@ from node.core import (
     semver,
 )
 
+from shared.install_dialog import InstallDialog
+
 from .changelog_dialog import ChangelogDialog
 from .history_dialog import HistoryDialog
-from .install_dialog import InstallDialog
 from .settings_dialog import SettingsDialog
 from .table import PackageTable
 
@@ -971,6 +972,7 @@ class App(tk.Tk):
             cwd=cwd,
             global_install=is_global,
             pm=pm,
+            pkg_manager=pkg_manager,
         )
         self.wait_window(dialog)
         if dialog.result != 'install':

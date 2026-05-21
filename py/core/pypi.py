@@ -137,13 +137,25 @@ def _extract_repo_url(info: dict) -> str | None:
     return info.get('home_page') or None
 
 
-def fetch_one(name: str, current_version: str | None, cooldown_days: int = 0) -> dict:
-    """単一パッケージの情報を取得して npm_registry.fetch_one と同形式の dict を返す。"""
+def fetch_one(
+    name: str,
+    current_version: str | None,
+    cooldown_days: int = 0,
+    spec: str | None = None,
+) -> dict:
+    """単一パッケージの情報を取得して npm_registry.fetch_one と同形式の dict を返す。
+
+    spec を渡すと「requirements の制約を満たす最高安定版」を allowedLatest に入れる
+    (Install (within spec) ボタン用)。spec=None なら allowedLatest=None。
+    """
     empty = {
         'pkgName': name, 'latest': None, 'latestMinor': None, 'latestMajor': None,
+        'allowedLatest': None,
         'currentPublishedAt': None, 'latestPublishedAt': None,
         'latestMinorPublishedAt': None, 'latestMajorPublishedAt': None,
+        'allowedLatestPublishedAt': None,
         'currentAgeInDays': None, 'latestMinorAgeInDays': None, 'latestMajorAgeInDays': None,
+        'allowedLatestAgeInDays': None,
         'provenance': None,
         'deprecated': None, 'latestDeprecated': None, 'license': None,
         'repositoryUrl': None,
@@ -188,6 +200,13 @@ def fetch_one(name: str, current_version: str | None, cooldown_days: int = 0) ->
         _first_upload_time(releases.get(latest_major)) if latest_major else None
     )
 
+    # 「spec が許す最高版」: requirements.txt / pyproject.toml の operator chain
+    # (例 '>=2.0,<3' や '~=2.31') を満たす最高安定版を計算する。spec が無ければ None。
+    allowed_latest = pep440.latest_matching(eligible, spec) if spec else None
+    allowed_latest_published_at = (
+        _first_upload_time(releases.get(allowed_latest)) if allowed_latest else None
+    )
+
     deprecated = _yanked_reason(releases.get(current_version)) if current_version else None
     latest_deprecated = _yanked_reason(releases.get(latest)) if latest else None
     license_str = _extract_license(info)
@@ -197,13 +216,16 @@ def fetch_one(name: str, current_version: str | None, cooldown_days: int = 0) ->
         'latest': latest,
         'latestMinor': latest_minor,
         'latestMajor': latest_major,
+        'allowedLatest': allowed_latest,
         'currentPublishedAt': current_published_at,
         'latestPublishedAt': latest_published_at,
         'latestMinorPublishedAt': latest_minor_published_at,
         'latestMajorPublishedAt': latest_major_published_at,
+        'allowedLatestPublishedAt': allowed_latest_published_at,
         'currentAgeInDays': _age_in_days(current_published_at),
         'latestMinorAgeInDays': _age_in_days(latest_minor_published_at),
         'latestMajorAgeInDays': _age_in_days(latest_major_published_at),
+        'allowedLatestAgeInDays': _age_in_days(allowed_latest_published_at),
         'provenance': None,  # PEP 740 attestations は未対応
         'deprecated': deprecated,
         'latestDeprecated': latest_deprecated,
@@ -213,19 +235,31 @@ def fetch_one(name: str, current_version: str | None, cooldown_days: int = 0) ->
 
 
 def fetch_many(
-    packages: list[tuple[str, str | None]],
+    packages: list[tuple],
     max_workers: int | None = None,
     on_progress=None,
     cooldown_days: int = 0,
 ) -> dict[str, dict]:
-    """[(name, current_version), ...] を並列で問い合わせて name → info を返す。"""
+    """[(name, current_version[, spec]), ...] を並列で問い合わせて name → info を返す。
+
+    タプルは 2 要素 (name, version) でも 3 要素 (name, version, spec) でも可。
+    spec を渡すと allowedLatest が計算される。
+    """
     out: dict[str, dict] = {}
     total = len(packages)
     if not packages:
         return out
     workers = max_workers if max_workers is not None else state.get_parallel_requests()
+
+    def _submit(ex, pkg):
+        # 2-tuple/3-tuple 両対応 (Global タブは spec 無し)
+        name = pkg[0]
+        ver = pkg[1] if len(pkg) > 1 else None
+        spec = pkg[2] if len(pkg) > 2 else None
+        return ex.submit(fetch_one, name, ver, cooldown_days, spec)
+
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(fetch_one, name, ver, cooldown_days): name for name, ver in packages}
+        futures = {_submit(ex, p): p[0] for p in packages}
         done = 0
         for fut in as_completed(futures):
             name = futures[fut]
