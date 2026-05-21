@@ -498,6 +498,11 @@ class App(tk.Tk):
             messagebox.showerror('NodeUpdater', f'package.json not found in:\n{self.current_project}')
             return
 
+        # プロジェクト切替時の「旧データが残ったまま」を避けるため一旦テーブルを空にする。
+        # cache hit のときは同 turn 内で set_packages するので画面上は瞬時に新データに置き換わる
+        # (tkinter は callback 終了まで再描画しない)。fetch のときは空のまま fetch 完了を待つ形になる。
+        self.project_table.set_packages([])
+
         cooldown = self._cooldown()
         ws = self._current_workspace
         ws_key = f'_ws_{ws.replace("/", "_")}' if ws else ''
@@ -553,6 +558,9 @@ class App(tk.Tk):
         self._set_status('Loaded from cache' if from_cache else 'Updated')
 
     def refresh_global(self, force: bool = False) -> None:
+        # 切替直後に旧データが残らないよう一旦空にする (refresh_project と同じ理由)。
+        self.global_table.set_packages([])
+
         cooldown = self._cooldown()
         cache_key = f'global_npm_cd{cooldown}'
         if not force:
