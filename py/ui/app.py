@@ -70,14 +70,22 @@ class App(tk.Tk):
         self.debug_log_btn = ttk.Button(top, text='Debug Log…', command=self._open_debug_log)
         self.debug_log_btn.pack(side='left', padx=(12, 0))
 
-        self.status_label = ttk.Label(top, text='', foreground='#0a6')
-        self.status_label.pack(side='right')
-        self.progress = ttk.Progressbar(top, mode='indeterminate', length=140)
         self._busy = False
         self._action_buttons: list[ttk.Button] = [self.choose_btn]
 
+        # 画面下部のステータスバー (長いフェッチメッセージ用)。
+        # bottom 系を先に pack してから notebook を pack することで
+        # ウィンドウを縮めてもステータスバーが画面外に消えない。
+        status_bar = ttk.Frame(self, padding=(8, 3))
+        status_bar.pack(side='bottom', fill='x')
+        status_bar.columnconfigure(0, weight=1)
+        self.status_label = ttk.Label(status_bar, text='', foreground='#0a6', anchor='w')
+        self.status_label.grid(row=0, column=0, sticky='ew')
+        self.progress = ttk.Progressbar(status_bar, mode='indeterminate', length=140)
+        # progress は busy 中だけ grid。grid_remove で隠す。
+
         self.notebook = ttk.Notebook(self, style=ui_tabs.ensure_notebook_style())
-        self.notebook.pack(fill='both', expand=True, padx=8, pady=(0, 8))
+        self.notebook.pack(side='top', fill='both', expand=True, padx=8, pady=(0, 8))
 
         # Global tab (左端: argv なし時のデフォルト)
         self.tab_global = ttk.Frame(self.notebook)
@@ -232,14 +240,14 @@ class App(tk.Tk):
 
     def _set_busy(self, busy: bool) -> None:
         if busy and not self._busy:
-            self.progress.pack(side='right', padx=(0, 8))
+            self.progress.grid(row=0, column=1, padx=(8, 0), sticky='e')
             self.progress.start(80)
             for b in self._action_buttons:
                 b.state(['disabled'])
             self._busy = True
         elif not busy and self._busy:
             self.progress.stop()
-            self.progress.pack_forget()
+            self.progress.grid_remove()
             for b in self._action_buttons:
                 b.state(['!disabled'])
             self._busy = False

@@ -98,17 +98,27 @@ class App(tk.Tk):
         self.debug_log_btn = ttk.Button(top, text='Debug Log…', command=self._open_debug_log)
         self.debug_log_btn.pack(side='left', padx=(4, 0))
 
-        # 右側: 進捗バー + ステータスラベル
-        self.status_label = ttk.Label(top, text='', foreground='#0a6')
-        self.status_label.pack(side='right')
-        self.progress = ttk.Progressbar(top, mode='indeterminate', length=140)
-        # pack はローディング中だけ。pack_forget で隠す
         self._busy = False
         # 操作ボタンの参照（busy 中は disable）
         self._action_buttons: list[ttk.Button] = [self.choose_btn]
 
+        # 画面下部のステータスバー (フェッチ進捗・操作結果を表示)。
+        # 長いメッセージで top bar が押し出されないよう独立配置。
+        # pack 順: bottom 系を先に pack してから notebook を pack することで
+        # ウィンドウを縮めた時にステータスバーが画面外に消えないようにする
+        # (CLAUDE.md の Toplevel フッター規約と同じ理由)。
+        # 内側は grid: label と progress の左右配置を pack_forget/再 pack で
+        # 順序が崩れないようにするため。
+        status_bar = ttk.Frame(self, padding=(8, 3))
+        status_bar.pack(side='bottom', fill='x')
+        status_bar.columnconfigure(0, weight=1)
+        self.status_label = ttk.Label(status_bar, text='', foreground='#0a6', anchor='w')
+        self.status_label.grid(row=0, column=0, sticky='ew')
+        self.progress = ttk.Progressbar(status_bar, mode='indeterminate', length=140)
+        # progress は busy 中だけ grid。grid_remove で隠す。
+
         self.notebook = ttk.Notebook(self, style=ui_tabs.ensure_notebook_style())
-        self.notebook.pack(fill='both', expand=True, padx=8, pady=(0, 8))
+        self.notebook.pack(side='top', fill='both', expand=True, padx=8, pady=(0, 8))
 
         # Global tab (左端: argv なし起動時のデフォルト)
         self.tab_global = ttk.Frame(self.notebook)
@@ -383,14 +393,14 @@ class App(tk.Tk):
     def _set_busy(self, busy: bool) -> None:
         """進捗バー開始/停止と操作ボタンの有効/無効切替。"""
         if busy and not self._busy:
-            self.progress.pack(side='right', padx=(0, 8))
+            self.progress.grid(row=0, column=1, padx=(8, 0), sticky='e')
             self.progress.start(80)
             for b in self._action_buttons:
                 b.state(['disabled'])
             self._busy = True
         elif not busy and self._busy:
             self.progress.stop()
-            self.progress.pack_forget()
+            self.progress.grid_remove()
             for b in self._action_buttons:
                 b.state(['!disabled'])
             self._busy = False
