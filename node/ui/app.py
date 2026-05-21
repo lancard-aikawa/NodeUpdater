@@ -28,6 +28,7 @@ from node.core import (
 )
 
 from shared.install_dialog import InstallDialog
+from shared.safe_install_dialog import SafeInstallDialog
 
 from .changelog_dialog import ChangelogDialog
 from .history_dialog import HistoryDialog
@@ -69,17 +70,18 @@ class App(tk.Tk):
     def _build_layout(self) -> None:
         top = ttk.Frame(self, padding=(8, 6))
         top.pack(fill='x')
-        ttk.Label(top, text='Project:').pack(side='left')
+        ttk.Label(top, text='プロジェクト:').pack(side='left')
         # 履歴付きドロップダウン: 過去に開いたプロジェクトをすぐ選び直せる
         self.project_combo = ttk.Combobox(top, state='readonly', width=70)
         self.project_combo['values'] = state.load_recent_projects(predicate=_is_node_project)
         self.project_combo.pack(side='left', padx=(4, 8))
         self.project_combo.bind('<<ComboboxSelected>>', self._on_recent_selected)
-        self.choose_btn = ttk.Button(top, text='Choose…', command=self.choose_project)
+        self.choose_btn = ttk.Button(top, text='フォルダ選択…', command=self.choose_project)
+        ui_tooltip.attach(self.choose_btn, 'Choose…: package.json があるフォルダを開く')
         self.choose_btn.pack(side='left')
 
         # 供給チェーンバッファ: 公開から N 日経っていない版を最新候補から除外する
-        ttk.Label(top, text='  Cooldown:').pack(side='left', padx=(12, 2))
+        ttk.Label(top, text='  クールダウン:').pack(side='left', padx=(12, 2))
         self.cooldown_var = tk.IntVar(value=state.get_cooldown_days())
         self.cooldown_spin = ttk.Spinbox(
             top, from_=0, to=90, width=4,
@@ -88,14 +90,22 @@ class App(tk.Tk):
         )
         self.cooldown_spin.pack(side='left')
         ttk.Label(top, text='日').pack(side='left', padx=(2, 0))
+        ui_tooltip.attach(
+            self.cooldown_spin,
+            'Cooldown: 公開から N 日経っていない版を最新候補から除外 '
+            '(供給チェーン攻撃対策のバッファ)。',
+        )
 
-        self.history_btn = ttk.Button(top, text='History…', command=self._open_history)
+        self.history_btn = ttk.Button(top, text='履歴…', command=self._open_history)
+        ui_tooltip.attach(self.history_btn, 'History…: このプロジェクトの過去 install 履歴')
         self.history_btn.pack(side='left', padx=(12, 0))
 
-        self.settings_btn = ttk.Button(top, text='Settings…', command=self._open_settings)
+        self.settings_btn = ttk.Button(top, text='設定…', command=self._open_settings)
+        ui_tooltip.attach(self.settings_btn, 'Settings…: proxy / 並列数 / registry URL 等')
         self.settings_btn.pack(side='left', padx=(4, 0))
 
-        self.debug_log_btn = ttk.Button(top, text='Debug Log…', command=self._open_debug_log)
+        self.debug_log_btn = ttk.Button(top, text='デバッグログ…', command=self._open_debug_log)
+        ui_tooltip.attach(self.debug_log_btn, 'Debug Log…: subprocess 失敗等の永続記録を閲覧')
         self.debug_log_btn.pack(side='left', padx=(4, 0))
 
         self._busy = False
@@ -125,21 +135,34 @@ class App(tk.Tk):
         self.notebook.add(self.tab_global, text='Global (npm -g)')
         global_bar = ttk.Frame(self.tab_global, padding=(4, 4))
         global_bar.pack(fill='x')
-        b4 = ttk.Button(global_bar, text='Refresh', command=self.refresh_global)
+        b4 = ttk.Button(global_bar, text='再取得', command=self.refresh_global)
+        ui_tooltip.attach(b4, 'Refresh: グローバルパッケージ一覧を再取得 (cache 利用)')
         b4.pack(side='left')
-        b5 = ttk.Button(global_bar, text='Force Refresh', command=lambda: self.refresh_global(force=True))
+        b5 = ttk.Button(global_bar, text='強制再取得', command=lambda: self.refresh_global(force=True))
+        ui_tooltip.attach(b5, 'Force Refresh: cache を無視して再取得')
         b5.pack(side='left', padx=(4, 0))
-        b6 = ttk.Button(global_bar, text='Install Minor Up…',
+        b6 = ttk.Button(global_bar, text='Minor版に更新…',
                         command=lambda: self._install_selected('global', 'minor'))
+        ui_tooltip.attach(b6, 'Install Minor Up…: 選択行を同 major 内の最新版に更新')
         b6.pack(side='left', padx=(12, 0))
-        b6b = ttk.Button(global_bar, text='Install Major Up…',
+        b6b = ttk.Button(global_bar, text='Major版に更新…',
                          command=lambda: self._install_selected('global', 'major'))
+        ui_tooltip.attach(b6b, 'Install Major Up…: 選択行を次 major へ更新 (Breaking Change の可能性)')
         b6b.pack(side='left', padx=(4, 0))
-        b6c = ttk.Button(global_bar, text='Open on npm',
+        b6e = ttk.Button(global_bar, text='安全インストール…',
+                         command=self._safe_install_global)
+        ui_tooltip.attach(
+            b6e,
+            'Safe Install…: 未インストールパッケージを cooldown 適用後の版で個別に追加',
+        )
+        b6e.pack(side='left', padx=(4, 0))
+        b6c = ttk.Button(global_bar, text='npmで開く',
                          command=lambda: self._open_selected_npm('global'))
+        ui_tooltip.attach(b6c, 'Open on npm: 選択行のパッケージページをブラウザで開く')
         b6c.pack(side='left', padx=(12, 0))
-        b6d = ttk.Button(global_bar, text='Changelog…',
+        b6d = ttk.Button(global_bar, text='変更履歴…',
                          command=lambda: self._show_changelog('global'))
+        ui_tooltip.attach(b6d, 'Changelog…: GitHub Releases から変更履歴を取得')
         b6d.pack(side='left', padx=(4, 0))
         self.global_table = PackageTable(self.tab_global, on_select=self._on_row_select)
         # Global は spec が無いため Wanted 列は常に空。既定は Latest にしておく。
@@ -150,27 +173,34 @@ class App(tk.Tk):
 
         # Project tab (Project と Audit は対で隣接)
         self.tab_project = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_project, text='Project')
+        self.notebook.add(self.tab_project, text='プロジェクト')
         project_bar = ttk.Frame(self.tab_project, padding=(4, 4))
         project_bar.pack(fill='x')
-        b1 = ttk.Button(project_bar, text='Refresh', command=self.refresh_project)
+        b1 = ttk.Button(project_bar, text='再取得', command=self.refresh_project)
+        ui_tooltip.attach(b1, 'Refresh: 依存一覧を再取得 (cache 利用)')
         b1.pack(side='left')
-        b2 = ttk.Button(project_bar, text='Force Refresh', command=lambda: self.refresh_project(force=True))
+        b2 = ttk.Button(project_bar, text='強制再取得', command=lambda: self.refresh_project(force=True))
+        ui_tooltip.attach(b2, 'Force Refresh: cache を無視して再取得')
         b2.pack(side='left', padx=(4, 0))
-        b3w = ttk.Button(project_bar, text='Install Wanted…',
+        b3w = ttk.Button(project_bar, text='Wanted版で更新…',
                          command=lambda: self._install_selected('project', 'wanted'))
+        ui_tooltip.attach(b3w, 'Install Wanted: spec (^/~/range) が許す最高版へ更新')
         b3w.pack(side='left', padx=(12, 0))
-        b3a = ttk.Button(project_bar, text='Install Minor Up…',
+        b3a = ttk.Button(project_bar, text='Minor版に更新…',
                          command=lambda: self._install_selected('project', 'minor'))
+        ui_tooltip.attach(b3a, 'Install Minor Up: 同 major 内の最新版に更新 (spec 無視)')
         b3a.pack(side='left', padx=(4, 0))
-        b3b = ttk.Button(project_bar, text='Install Major Up…',
+        b3b = ttk.Button(project_bar, text='Major版に更新…',
                          command=lambda: self._install_selected('project', 'major'))
+        ui_tooltip.attach(b3b, 'Install Major Up: 次 major へ更新 (Breaking Change の可能性)')
         b3b.pack(side='left', padx=(4, 0))
-        b3 = ttk.Button(project_bar, text='Open on npm',
+        b3 = ttk.Button(project_bar, text='npmで開く',
                         command=lambda: self._open_selected_npm('project'))
+        ui_tooltip.attach(b3, 'Open on npm: 選択行のパッケージページをブラウザで開く')
         b3.pack(side='left', padx=(12, 0))
-        b3c = ttk.Button(project_bar, text='Changelog…',
+        b3c = ttk.Button(project_bar, text='変更履歴…',
                          command=lambda: self._show_changelog('project'))
+        ui_tooltip.attach(b3c, 'Changelog…: GitHub Releases から変更履歴を取得')
         b3c.pack(side='left', padx=(4, 0))
 
         # 右側: ワークスペースセレクタ (モノレポ時のみ表示)
@@ -179,7 +209,7 @@ class App(tk.Tk):
             project_bar, textvariable=self.workspace_var, state='readonly', width=32,
         )
         self.workspace_combo.pack(side='right', padx=(0, 4))
-        self.workspace_label = ttk.Label(project_bar, text='Workspace:')
+        self.workspace_label = ttk.Label(project_bar, text='ワークスペース:')
         self.workspace_label.pack(side='right', padx=(12, 4))
         self.workspace_combo.bind('<<ComboboxSelected>>', self._on_workspace_changed)
         # 初期状態は非表示 (プロジェクト読み込み時に必要なら表示)
@@ -192,14 +222,17 @@ class App(tk.Tk):
 
         # Tree tab (Project と対: 物理 node_modules 階層を表示)
         self.tab_tree = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_tree, text='Tree')
+        self.notebook.add(self.tab_tree, text='依存ツリー')
         tree_bar = ttk.Frame(self.tab_tree, padding=(4, 4))
         tree_bar.pack(fill='x')
-        b_tree_refresh = ttk.Button(tree_bar, text='Refresh', command=self.refresh_tree)
+        b_tree_refresh = ttk.Button(tree_bar, text='再取得', command=self.refresh_tree)
+        ui_tooltip.attach(b_tree_refresh, 'Refresh: package-lock.json から依存ツリーを再構築')
         b_tree_refresh.pack(side='left')
-        b_tree_expand = ttk.Button(tree_bar, text='Expand all', command=self._tree_expand_all)
+        b_tree_expand = ttk.Button(tree_bar, text='全展開', command=self._tree_expand_all)
+        ui_tooltip.attach(b_tree_expand, 'Expand all: すべてのノードを開く')
         b_tree_expand.pack(side='left', padx=(8, 0))
-        b_tree_collapse = ttk.Button(tree_bar, text='Collapse all', command=self._tree_collapse_all)
+        b_tree_collapse = ttk.Button(tree_bar, text='全折りたたみ', command=self._tree_collapse_all)
+        ui_tooltip.attach(b_tree_collapse, 'Collapse all: すべてのノードを閉じる')
         b_tree_collapse.pack(side='left', padx=(4, 0))
         self.tree_count_label = ttk.Label(tree_bar, text='', foreground='#666')
         self.tree_count_label.pack(side='right')
@@ -230,50 +263,59 @@ class App(tk.Tk):
 
         # Audit tab (Project と対)
         self.tab_audit = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_audit, text='Audit (OSV)')
+        self.notebook.add(self.tab_audit, text='監査 (OSV)')
         audit_bar = ttk.Frame(self.tab_audit, padding=(4, 4))
         audit_bar.pack(fill='x')
-        b7 = ttk.Button(audit_bar, text='Run OSV Scan', command=self.run_osv)
+        b7 = ttk.Button(audit_bar, text='OSVスキャン実行', command=self.run_osv)
+        ui_tooltip.attach(b7, 'Run OSV Scan: OSV.dev で脆弱性スキャン (推移依存も含む)')
         b7.pack(side='left')
-        b7b = ttk.Button(audit_bar, text='Force Rescan',
+        b7b = ttk.Button(audit_bar, text='強制再スキャン',
                          command=lambda: self.run_osv(force=True))
+        ui_tooltip.attach(b7b, 'Force Rescan: cache を無視して OSV.dev に再問い合わせ')
         b7b.pack(side='left', padx=(4, 0))
-        b8 = ttk.Button(audit_bar, text='Run npm audit', command=self.run_npm_audit)
+        b8 = ttk.Button(audit_bar, text='npm audit 実行', command=self.run_npm_audit)
+        ui_tooltip.attach(b8, 'Run npm audit: npm 独自 advisory DB で脆弱性スキャン')
         b8.pack(side='left', padx=(12, 0))
         b9 = ttk.Button(audit_bar, text='npm audit fix…',
                         command=lambda: self._run_audit_fix(force=False))
+        ui_tooltip.attach(b9, 'npm audit fix: 脆弱性を自動修正 (spec 内の更新のみ)')
         b9.pack(side='left', padx=(4, 0))
         b10 = ttk.Button(audit_bar, text='npm audit fix --force…',
                          command=lambda: self._run_audit_fix(force=True))
+        ui_tooltip.attach(b10, '--force: Breaking Change を伴う major 更新も適用 (要確認)')
         b10.pack(side='left', padx=(4, 0))
 
         # エクスポート用の 2 段目
         export_bar = ttk.Frame(self.tab_audit, padding=(4, 0))
         export_bar.pack(fill='x')
-        b_exp_osv = ttk.Button(export_bar, text='Export OSV…', command=self._export_osv)
+        b_exp_osv = ttk.Button(export_bar, text='OSV結果を書き出し…', command=self._export_osv)
+        ui_tooltip.attach(b_exp_osv, 'Export OSV…: 直近の OSV スキャン結果を md/csv に書き出し')
         b_exp_osv.pack(side='left')
-        b_exp_npm = ttk.Button(export_bar, text='Export npm audit…', command=self._export_npm_audit)
+        b_exp_npm = ttk.Button(export_bar, text='npm audit結果を書き出し…', command=self._export_npm_audit)
+        ui_tooltip.attach(b_exp_npm, 'Export npm audit…: 直近の npm audit 結果を md/csv に書き出し')
         b_exp_npm.pack(side='left', padx=(8, 0))
 
         self.audit_text = tk.Text(self.tab_audit, wrap='none', height=20)
         self.audit_text.pack(fill='both', expand=True, padx=4, pady=4)
 
         self._action_buttons.extend(
-            [b1, b2, b3, b3w, b3a, b3b, b3c, b4, b5, b6, b6b, b6c, b6d,
+            [b1, b2, b3, b3w, b3a, b3b, b3c, b4, b5, b6, b6b, b6c, b6d, b6e,
              b7, b7b, b8, b9, b10,
              b_exp_osv, b_exp_npm,
              b_tree_refresh, b_tree_expand, b_tree_collapse]
         )
 
     # ── フィルタバー ──────────────────────────────────────────────────────────
+    # (label, internal value) — label は UI 表示用、value は status と対応。
     _STATUS_OPTIONS = [
-        ('All', None),
-        ('Outdated', 'outdated'),
-        ('Major', 'major'),
-        ('Minor', 'minor'),
-        ('Both', 'both'),
-        ('Latest', 'latest'),
-        ('Unknown', 'unknown'),
+        ('全て',     None),
+        ('古い',     'outdated'),
+        ('Major',    'major'),
+        ('Minor',    'minor'),
+        ('両方',     'both'),
+        ('最新',     'latest'),
+        ('未導入',   'not_installed'),
+        ('不明',     'unknown'),
     ]
 
     def _make_filter_bar(
@@ -288,12 +330,12 @@ class App(tk.Tk):
         bar = ttk.Frame(parent, padding=(4, 2))
         bar.pack(fill='x')
 
-        ttk.Label(bar, text='Filter:').pack(side='left')
+        ttk.Label(bar, text='検索:').pack(side='left')
         search_var = tk.StringVar()
         ttk.Entry(bar, textvariable=search_var, width=24).pack(side='left', padx=(4, 0))
 
-        ttk.Label(bar, text='Status:').pack(side='left', padx=(12, 4))
-        status_var = tk.StringVar(value='All')
+        ttk.Label(bar, text='状態:').pack(side='left', padx=(12, 4))
+        status_var = tk.StringVar(value='全て')
         status_combo = ttk.Combobox(
             bar, textvariable=status_var, state='readonly',
             values=[label for label, _ in self._STATUS_OPTIONS],
@@ -302,7 +344,7 @@ class App(tk.Tk):
         status_combo.pack(side='left')
 
         dev_var = tk.BooleanVar()
-        ttk.Checkbutton(bar, text='Dev only', variable=dev_var).pack(side='left', padx=(12, 0))
+        ttk.Checkbutton(bar, text='Devのみ', variable=dev_var).pack(side='left', padx=(12, 0))
 
         count_label = ttk.Label(bar, text='', foreground='#666')
         count_label.pack(side='right')
@@ -318,7 +360,7 @@ class App(tk.Tk):
             desc = VIEW_PRESET_DESCRIPTIONS.get(label)
             if desc:
                 ui_tooltip.attach(rb, desc)
-        view_label = ttk.Label(bar, text='View:', foreground='#666')
+        view_label = ttk.Label(bar, text='表示:', foreground='#666')
         view_label.pack(side='right', padx=(16, 4))
         ui_tooltip.attach(
             view_label,
@@ -378,7 +420,7 @@ class App(tk.Tk):
         except (TypeError, ValueError):
             days = 7
         state.set_cooldown_days(days)
-        self._set_status(f'Cooldown を {days} 日に設定 (Refresh で反映)')
+        self._set_status(f'Cooldown を {days} 日に設定 (再取得で反映)')
 
     def _cooldown(self) -> int:
         try:
@@ -492,7 +534,7 @@ class App(tk.Tk):
 
     def refresh_project(self, force: bool = False) -> None:
         if not self.current_project:
-            self._set_status('Choose a project first', color='#a60')
+            self._set_status('先にプロジェクトを選択してください', color='#a60')
             return
         if not (self.current_project / 'package.json').exists():
             messagebox.showerror('NodeUpdater', f'package.json not found in:\n{self.current_project}')
@@ -514,16 +556,26 @@ class App(tk.Tk):
                 return
 
         deps = package_json.collect_dependencies_at(self.current_project, ws)
+        # node_modules を覗いて実インストール版を埋める。workspaces を使うリポでも
+        # node_modules はルートにホイストされるため project root を渡す。
+        package_json.attach_installed_info(self.current_project, deps)
         ws_label = f' ws={ws or "."}' if len(self._workspaces) > 1 else ''
+        not_installed_n = sum(1 for d in deps if not d.get('installed'))
+        ni_label = f', 未導入 {not_installed_n}' if not_installed_n else ''
         self._set_status(
-            f'Fetching from npm registry: 0/{len(deps)} (cooldown={cooldown}d{ws_label})'
+            f'npm registry へ問い合わせ: 0/{len(deps)} '
+            f'(cooldown={cooldown}日{ws_label}{ni_label})'
         )
 
         def work():
             def on_prog(done_count, total):
-                self._post_progress(done_count, total, 'Fetching from npm registry')
+                self._post_progress(done_count, total, 'npm registry から取得')
             infos = npm_registry.fetch_many(
-                [(d['name'], d['version'], d.get('spec')) for d in deps],
+                # registry 問い合わせの current は「実インストール版があればそれ、
+                # 無ければ spec 正規化版」をフォールバック。currentPublishedAt 等は
+                # 実インストール版で参照したいので installed_version を優先する。
+                [(d['name'], d.get('installed_version') or d.get('version'), d.get('spec'))
+                 for d in deps],
                 on_progress=on_prog,
                 cooldown_days=cooldown,
             )
@@ -532,7 +584,7 @@ class App(tk.Tk):
             # bundlephobia から bundle size を後付け (version 単位で永続キャッシュ)
             def on_size_prog(done_count, total):
                 if total:
-                    self._post_progress(done_count, total, 'Fetching bundle sizes')
+                    self._post_progress(done_count, total, 'bundle size を取得')
             sizes = bundlephobia.fetch_many_cached(
                 [(p['name'], p.get('current')) for p in pkg_list],
                 on_progress=on_size_prog,
@@ -555,7 +607,7 @@ class App(tk.Tk):
 
     def _render_project(self, payload: dict, from_cache: bool) -> None:
         self.project_table.set_packages(payload.get('packages', []))
-        self._set_status('Loaded from cache' if from_cache else 'Updated')
+        self._set_status('cache から読込' if from_cache else '再取得完了')
 
     def refresh_global(self, force: bool = False) -> None:
         # 切替直後に旧データが残らないよう一旦空にする (refresh_project と同じ理由)。
@@ -569,17 +621,22 @@ class App(tk.Tk):
                 self._render_global(cached, from_cache=True)
                 return
 
-        self._set_status(f'Listing global packages (npm list -g)… (cooldown={cooldown}d)')
+        self._set_status(f'グローバルパッケージを列挙中 (npm list -g)… (cooldown={cooldown}日)')
 
         def work():
             installed = npm_global.list_global_packages()
             if not installed:
                 return {'packages': [], 'error': 'npm が見つからないか、グローバルパッケージがありません'}
-            deps = [{'name': p['name'], 'version': p['version'], 'dev': False} for p in installed]
+            # Global は `npm list -g` の結果なので常に installed=True。
+            deps = [{
+                'name': p['name'], 'version': p['version'],
+                'installed_version': p['version'], 'installed': True,
+                'dev': False,
+            } for p in installed]
             total = len(deps)
-            self.after(0, lambda: self._set_status(f'Fetching from npm registry: 0/{total}'))
+            self.after(0, lambda: self._set_status(f'npm registry から取得: 0/{total}'))
             def on_prog(done_count, t):
-                self._post_progress(done_count, t, 'Fetching from npm registry')
+                self._post_progress(done_count, t, 'npm registry から取得')
             infos = npm_registry.fetch_many(
                 [(d['name'], d['version'], d.get('spec')) for d in deps],
                 on_progress=on_prog,
@@ -603,7 +660,7 @@ class App(tk.Tk):
         if payload.get('error'):
             self._set_status(payload['error'], color='#a60')
         else:
-            self._set_status('Loaded from cache' if from_cache else 'Updated')
+            self._set_status('cache から読込' if from_cache else '再取得完了')
         self.global_table.set_packages(payload.get('packages', []))
 
     def run_osv(self, force: bool = False) -> None:
@@ -665,11 +722,11 @@ class App(tk.Tk):
             source = 'package.json (lock 無し: 直接依存のみ)'
 
         direct_n = sum(1 for d in deps if d.get('direct'))
-        self._set_status(f'Querying OSV.dev: {len(deps)} packages ({direct_n} direct) from {source}…')
+        self._set_status(f'OSV.dev へ問い合わせ: {len(deps)} 件 (直接 {direct_n} 件) / source={source}…')
 
         def work():
             def on_prog(done_count, total):
-                self._post_progress(done_count, total, 'OSV scan')
+                self._post_progress(done_count, total, 'OSV スキャン')
             results = osv.query_batch(
                 [{'name': d['name'], 'version': d['version']} for d in deps],
                 on_progress=on_prog,
@@ -747,7 +804,7 @@ class App(tk.Tk):
         try:
             text = to_text(data, fmt=fmt, project_path=str(self.current_project or ''))
             Path(path).write_text(text, encoding='utf-8')
-            self._set_status(f'Exported {kind} report: {path}')
+            self._set_status(f'{kind} レポートを書き出し: {path}')
         except OSError as e:
             messagebox.showerror('NodeUpdater', f'書き込みエラー\n\n{e}')
 
@@ -863,7 +920,7 @@ class App(tk.Tk):
             messagebox.showerror('NodeUpdater', 'package.json not found.')
             return
         self.audit_text.delete('1.0', 'end')
-        self._set_status('Running `npm audit --json`…')
+        self._set_status('`npm audit --json` を実行中…')
         project_str = str(self.current_project)
 
         def work():
@@ -874,7 +931,7 @@ class App(tk.Tk):
                 self._set_status(f'Error: {err}', color='#c00')
                 return
             if not result:
-                self._set_status('npm audit failed', color='#c00')
+                self._set_status('npm audit 失敗', color='#c00')
                 self.audit_text.insert(
                     'end', 'npm audit を実行できませんでした (npm 未インストール / タイムアウト)。\n'
                 )
@@ -883,7 +940,7 @@ class App(tk.Tk):
             self._render_npm_audit(result)
             meta = (result.get('metadata') or {}).get('vulnerabilities') or {}
             total = meta.get('total') or 0
-            self._set_status(f'npm audit: {total} vulnerabilities')
+            self._set_status(f'npm audit: {total} 件の脆弱性')
 
         self._run_bg(work, done)
 
@@ -953,7 +1010,7 @@ class App(tk.Tk):
             return
         try:
             npm_global.open_command_prompt(cmd, cwd=str(self.current_project))
-            self._set_status(f'Opened prompt: {cmd}  (Refresh after completion)')
+            self._set_status(f'別 console で実行中: {cmd}  (完了後 再取得)')
         except OSError as e:
             messagebox.showerror('NodeUpdater', f'プロンプトの起動に失敗しました\n\n{e}')
 
@@ -982,6 +1039,25 @@ class App(tk.Tk):
             current_version=pkg.get('current'),
             latest_version=latest,
             repo_url=pkg.get('repositoryUrl'),
+        )
+
+    def _safe_install_global(self) -> None:
+        """未インストールパッケージを cooldown 適用後の版で 1 つずつ安全に追加。
+
+        テーブル選択不要 (まだ install していないパッケージが対象なので)。
+        Install 完了後に Global タブを refresh して結果を反映する。
+        """
+        SafeInstallDialog(
+            self,
+            title='Safe Install (Global / npm -g)',
+            pm='npm',
+            global_install=True,
+            cwd=None,
+            cooldown_days=self._cooldown(),
+            resolver=npm_registry.resolve_for_install,
+            pkg_manager=pkg_manager,
+            opener=npm_global.open_command_prompt,
+            on_installed=lambda: self.refresh_global(force=True),
         )
 
     def _install_selected(self, scope: str, target: str) -> None:
@@ -1100,12 +1176,31 @@ def _build_package_list(deps: list[dict], infos: dict[str, dict]) -> list[dict]:
         latest = info.get('latest')
         latest_minor = info.get('latestMinor')
         latest_major = info.get('latestMajor')
-        status = semver.classify(d.get('version'), latest)
-        if latest_minor and latest_major:
-            status = 'both'
+        installed_version = d.get('installed_version')
+        # is_installed が明示されていない古いデータは installed_version 有無で判定。
+        is_installed = d.get('installed')
+        if is_installed is None:
+            is_installed = installed_version is not None
+        # 「Current」表示は実インストール版。未導入なら None (テーブルが '-' を出す)。
+        current_display = installed_version if is_installed else None
+        if not is_installed:
+            status = 'not_installed'
+        else:
+            status = semver.classify(installed_version or d.get('version'), latest)
+            if latest_minor and latest_major:
+                status = 'both'
+        # 未導入時は「現在版に紐づく」field をクリアする。spec 正規化版
+        # ('^1.2.3' → '1.2.3') を current_version として fetch_one に渡しているため、
+        # そのままだと「入っていない版の公開日 / provenance / deprecated」が
+        # Current 列の付随情報として表示されてしまう。
+        current_pub = info.get('currentPublishedAt') if is_installed else None
+        current_age = info.get('currentAgeInDays') if is_installed else None
+        deprecated = info.get('deprecated') if is_installed else None
+        provenance = info.get('provenance') if is_installed else None
         out.append({
             'name': d['name'],
-            'current': d.get('version'),
+            'current': current_display,
+            'installed': is_installed,
             'spec': d.get('spec'),
             'latest': latest,
             'latestMinor': latest_minor,
@@ -1113,17 +1208,17 @@ def _build_package_list(deps: list[dict], infos: dict[str, dict]) -> list[dict]:
             'allowedLatest': info.get('allowedLatest'),
             'status': status,
             'dev': d.get('dev', False),
-            'currentPublishedAt': info.get('currentPublishedAt'),
+            'currentPublishedAt': current_pub,
             'latestPublishedAt': info.get('latestPublishedAt'),
             'latestMinorPublishedAt': info.get('latestMinorPublishedAt'),
             'latestMajorPublishedAt': info.get('latestMajorPublishedAt'),
             'allowedLatestPublishedAt': info.get('allowedLatestPublishedAt'),
-            'currentAgeInDays': info.get('currentAgeInDays'),
+            'currentAgeInDays': current_age,
             'latestMinorAgeInDays': info.get('latestMinorAgeInDays'),
             'latestMajorAgeInDays': info.get('latestMajorAgeInDays'),
             'allowedLatestAgeInDays': info.get('allowedLatestAgeInDays'),
-            'provenance': info.get('provenance'),
-            'deprecated': info.get('deprecated'),
+            'provenance': provenance,
+            'deprecated': deprecated,
             'latestDeprecated': info.get('latestDeprecated'),
             'license': info.get('license'),
             'repositoryUrl': info.get('repositoryUrl'),

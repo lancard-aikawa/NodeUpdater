@@ -255,6 +255,124 @@ def fetch_many(
     return out
 
 
+def resolve_for_install(
+    name: str,
+    spec: str | None,
+    cooldown_days: int,
+) -> dict:
+    """Safe Install 用: spec と cooldown を考慮して install 予定版を決定する。
+
+    フロー:
+      1. registry から package metadata を取得
+      2. cooldown を満たす版集合 (eligible) を作る
+      3. spec が空/wildcard なら eligible の最高 stable
+         spec が我々の matcher で扱える形式なら eligible ∩ spec の最高
+         spec が time_map のキーと完全一致するならその版を採用 (prerelease pin 等)
+         それ以外は unsupported
+      4. dist-tags.latest との差 (cooldown で弾かれた新版) を一覧化して返す
+
+    Returns dict:
+      found: bool                — registry に存在したか
+      resolved: str | None       — install 予定版 (None = 失敗)
+      resolved_published_at: str | None
+      resolved_age_days: int | None
+      raw_latest: str | None     — registry の dist-tags.latest (cooldown 適用前)
+      raw_latest_published_at: str | None
+      raw_latest_age_days: int | None
+      excluded_newer: list[dict] — cutoff より新しい安定版 (新しい順, 最大 5)
+                                    各要素 {version, published_at, age_days}
+      spec_status: 'none'|'wildcard'|'parsed'|'exact_pin'|'unsupported'
+      reason: str | None         — UI に出す簡易メッセージ
+    """
+    empty = {
+        'name': name, 'found': False, 'resolved': None,
+        'resolved_published_at': None, 'resolved_age_days': None,
+        'raw_latest': None, 'raw_latest_published_at': None, 'raw_latest_age_days': None,
+        'excluded_newer': [], 'spec_status': 'none', 'reason': None,
+    }
+    data = _http_get_json(f'{state.get_registry_url()}/{_encode_pkg(name)}')
+    if not data:
+        empty['reason'] = 'registry にアクセスできませんでした'
+        return empty
+    # 404 の場合 data は None で上で抜ける。ここに来た時点で取得は成功。
+    if not (data.get('versions') or {}) and not (data.get('dist-tags') or {}):
+        empty['reason'] = f'パッケージ {name} は registry に存在しません'
+        return empty
+
+    versions = data.get('versions') or {}
+    time_map = data.get('time') or {}
+    raw_latest = (data.get('dist-tags') or {}).get('latest')
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=cooldown_days) if cooldown_days > 0 else None
+    all_versions = list(versions.keys())
+    if cutoff is not None:
+        eligible = [v for v in all_versions if not _is_after(time_map.get(v), cutoff)]
+    else:
+        eligible = all_versions
+
+    # spec の解釈
+    spec_clean = (spec or '').strip()
+    if not spec_clean or semver.is_wildcard_spec(spec_clean):
+        spec_status = 'wildcard' if spec_clean else 'none'
+        resolved = _highest_stable(eligible)
+    elif spec_clean in time_map:
+        # registry に実在する exact version (prerelease pin など) を許可
+        spec_status = 'exact_pin'
+        if cutoff is None or not _is_after(time_map.get(spec_clean), cutoff):
+            resolved = spec_clean
+        else:
+            resolved = None  # cooldown 未満なので install させない
+    elif semver.parseable_spec(spec_clean):
+        spec_status = 'parsed'
+        resolved = semver.latest_matching(eligible, spec_clean)
+    else:
+        spec_status = 'unsupported'
+        resolved = None
+
+    # cutoff より新しい安定版 = cooldown により除外された候補
+    excluded_newer: list[dict] = []
+    if cutoff is not None:
+        excluded: list[tuple[str, str]] = []
+        for v in all_versions:
+            if '-' in v:
+                continue
+            ts = time_map.get(v)
+            if _is_after(ts, cutoff):
+                excluded.append((v, ts))
+        excluded.sort(key=lambda t: t[1], reverse=True)
+        for v, ts in excluded[:5]:
+            excluded_newer.append({
+                'version': v,
+                'published_at': ts,
+                'age_days': _age_in_days(ts),
+            })
+
+    raw_latest_ts = time_map.get(raw_latest) if raw_latest else None
+    resolved_ts = time_map.get(resolved) if resolved else None
+
+    reason: str | None = None
+    if spec_status == 'unsupported':
+        reason = f'spec "{spec_clean}" は Safe Install では未対応です (`^` / `~` / 範囲 / 完全一致版のみ)'
+    elif resolved is None and spec_status == 'exact_pin':
+        reason = f'{spec_clean} は cooldown ({cooldown_days}日) を満たしていません'
+    elif resolved is None:
+        reason = f'cooldown {cooldown_days}日 を満たす版が見つかりませんでした'
+
+    return {
+        'name': name,
+        'found': True,
+        'resolved': resolved,
+        'resolved_published_at': resolved_ts,
+        'resolved_age_days': _age_in_days(resolved_ts),
+        'raw_latest': raw_latest,
+        'raw_latest_published_at': raw_latest_ts,
+        'raw_latest_age_days': _age_in_days(raw_latest_ts),
+        'excluded_newer': excluded_newer,
+        'spec_status': spec_status,
+        'reason': reason,
+    }
+
+
 def search(query: str, size: int = 10) -> list[dict]:
     """`/-/v1/search` でパッケージ検索。"""
     q = urllib.parse.quote(query)

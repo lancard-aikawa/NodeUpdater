@@ -8,14 +8,29 @@ from shared import ui_tooltip
 
 # status → 行タグ（色分け）
 _STATUS_COLORS = {
-    'both':    '#ffd0d0',  # 赤系: major + minor 両方ある
-    'major':   '#ffe0c0',  # オレンジ: メジャー更新あり
-    'minor':   '#fff3b0',  # 黄: マイナー/パッチ更新あり
-    'latest':  '#d8f3d0',  # 緑: 最新
-    'unknown': '#e8e8e8',  # グレー: 不明
+    'both':          '#ffd0d0',  # 赤系: major + minor 両方ある
+    'major':         '#ffe0c0',  # オレンジ: メジャー更新あり
+    'minor':         '#fff3b0',  # 黄: マイナー/パッチ更新あり
+    'latest':        '#d8f3d0',  # 緑: 最新
+    'not_installed': '#d6e6f5',  # 青: package.json にあるが node_modules に無い
+    'unknown':       '#e8e8e8',  # グレー: 不明
 }
 
-_STATUS_ORDER = {'both': 0, 'major': 1, 'minor': 2, 'unknown': 3, 'latest': 4}
+# ソート優先順: 重大度の高い更新が先頭。未インストールは latest より前 (操作対象として目立たせる)。
+_STATUS_ORDER = {
+    'both': 0, 'major': 1, 'minor': 2,
+    'not_installed': 3, 'unknown': 4, 'latest': 5,
+}
+
+# Status セル表示用のラベル (狭い列に長文を入れないため短縮+日本語)
+_STATUS_LABEL = {
+    'both':          'both',
+    'major':         'major',
+    'minor':         'minor',
+    'latest':        'latest',
+    'not_installed': '未導入',
+    'unknown':       'unknown',
+}
 
 # Wanted セルが解釈不能 spec の時に入れる sentinel 文字列。
 # npm_registry.fetch_one 側と取り決め。表示はそのまま `?` として出す。
@@ -55,6 +70,34 @@ VIEW_PRESET_DESCRIPTIONS: dict[str, str] = {
 
 DEFAULT_PRESET = 'Wanted'
 
+# テーブル列ヘッダの日本語説明 (ホバーで表示)。npm CLI 用語との対応を残すため
+# ヘッダ自体は英語のままにしている。
+_HEADER_TOOLTIPS: dict[str, str] = {
+    'name':    'Package: パッケージ名',
+    'current': 'Current: 実際にインストールされている版 (node_modules / npm list -g より)。\n'
+               'package.json に書いてあるだけで未インストールなら "-" 表示。',
+    'age_cur': 'Cur age: Current 版が公開されてからの経過日数',
+    'wanted': 'Wanted: package.json の spec (^/~/range) を満たす最高安定版。\n'
+              '"-" = 上げ余地なし。 "?" = spec を解釈できず判定不能 (hover で詳細)。',
+    'age_wnt': 'Wnt age: Wanted 版が公開されてからの経過日数',
+    'minor':   'Minor up: spec を無視した同 major 内の最新版',
+    'age_min': 'Min age: Minor 版が公開されてからの経過日数',
+    'major':   'Major up: spec を無視した次 major 以降の最新版 (Breaking Change の可能性)',
+    'age_maj': 'Maj age: Major 版が公開されてからの経過日数',
+    'status':  '状態:\n'
+               '  major / minor / both = 更新候補あり\n'
+               '  latest = 最新\n'
+               '  未導入 = package.json にあるが node_modules に無い\n'
+               '  unknown = 判定不能',
+    'dev':     'dev: devDependencies のパッケージかどうか',
+    'prov':    'prov (provenance): npm が検証する供給元署名の有無',
+    'dep':     'dep (deprecated):\n'
+               '  yes = 現行版が非推奨\n'
+               '  abnd = パッケージ自体が放棄 (latest も非推奨)',
+    'license': 'License: SPDX 識別子',
+    'gz':      'Bundle (gz): bundlephobia から取得した gzip 後サイズ',
+}
+
 
 class PackageTable(ttk.Frame):
     """Package / Current / Wanted / Minor / Major / Age 列 / status / dev / prov / dep / license / gz。
@@ -76,6 +119,8 @@ class PackageTable(ttk.Frame):
         tree = ttk.Treeview(self, columns=self.COLUMNS, show='headings', selectmode='extended')
         # Age 列はヘッダ短縮: status 用語 (minor/major) に揃えて Cur/Min/Maj。
         # dep: 'yes' (現行版が deprecated) / 'abnd' (package abandoned: latest も deprecated) / ''
+        # ヘッダは npm CLI 用語 (Wanted/Minor up 等) に合わせて英語のまま。
+        # 日本語の意味はホバーで `_HEADER_TOOLTIPS` から表示する。
         headings = {
             'name':    ('Package',          220),
             'current': ('Current',           80),
@@ -93,6 +138,7 @@ class PackageTable(ttk.Frame):
             'license': ('License',           90),
             'gz':      ('Bundle (gz)',       80),
         }
+        self._headings = headings
         right_aligned = {'age_cur', 'age_wnt', 'age_min', 'age_maj', 'gz'}
         centered = {'dev', 'prov', 'status', 'dep'}
         for col, (label, width) in headings.items():
@@ -109,9 +155,14 @@ class PackageTable(ttk.Frame):
             tree.tag_configure(status, background=color)
 
         vsb = ttk.Scrollbar(self, orient='vertical', command=tree.yview)
-        tree.configure(yscrollcommand=vsb.set)
+        # 横 scrollbar: 'All' プリセットなど全列幅 > 表示幅で右端が切れるため必要。
+        # 'name' 列以外は stretch=False なので、合計幅が widget より広いと自動で
+        # スクロール可能になる。
+        hsb = ttk.Scrollbar(self, orient='horizontal', command=tree.xview)
+        tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         tree.grid(row=0, column=0, sticky='nsew')
         vsb.grid(row=0, column=1, sticky='ns')
+        hsb.grid(row=1, column=0, sticky='ew')
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
@@ -229,7 +280,7 @@ class PackageTable(ttk.Frame):
                 self._age_text(p.get('latestMinorAgeInDays')),
                 p.get('latestMajor') or '',
                 self._age_text(p.get('latestMajorAgeInDays')),
-                p.get('status', ''),
+                _STATUS_LABEL.get(p.get('status', ''), p.get('status', '')),
                 'yes' if p.get('dev') else '',
                 'yes' if p.get('provenance') else ('no' if p.get('provenance') is False else ''),
                 self._dep_text(p),
@@ -283,8 +334,16 @@ class PackageTable(ttk.Frame):
         return cols[idx]
 
     def _on_motion(self, event) -> None:
-        row_id = self.tree.identify_row(event.y)
         col_id = self.tree.identify_column(event.x)
+        # ヘッダ上 → 日本語の列説明を表示
+        try:
+            region = self.tree.identify_region(event.x, event.y)
+        except tk.TclError:
+            region = ''
+        if region == 'heading' and col_id:
+            self._show_header_tip(event, col_id)
+            return
+        row_id = self.tree.identify_row(event.y)
         if not row_id or not col_id:
             self._hide_cell_tip()
             return
@@ -321,6 +380,27 @@ class PackageTable(ttk.Frame):
         else:
             rx = self.tree.winfo_pointerx() + 12
             ry = self.tree.winfo_pointery() + 12
+        try:
+            tw = ui_tooltip.make_bubble(self.tree, text)
+            tw.wm_geometry(f'+{rx}+{ry}')
+            self._cell_tip = tw
+            self._cell_tip_key = key
+        except tk.TclError:
+            self._cell_tip = None
+            self._cell_tip_key = None
+
+    def _show_header_tip(self, event, col_id: str) -> None:
+        col_name = self._resolve_column_name(col_id)
+        text = _HEADER_TOOLTIPS.get(col_name or '')
+        if not text:
+            self._hide_cell_tip()
+            return
+        key = ('__header__', col_name)
+        if key == self._cell_tip_key:
+            return
+        self._hide_cell_tip()
+        rx = self.tree.winfo_pointerx() + 14
+        ry = self.tree.winfo_pointery() + 18
         try:
             tw = ui_tooltip.make_bubble(self.tree, text)
             tw.wm_geometry(f'+{rx}+{ry}')

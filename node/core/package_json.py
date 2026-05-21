@@ -49,6 +49,37 @@ def collect_dependencies(project_path: Path) -> list[dict]:
     return out
 
 
+def read_installed_version(project_path: Path, name: str) -> str | None:
+    """node_modules/<name>/package.json から実際にインストール済みの version を読む。
+
+    未インストール / node_modules 無し / 壊れた JSON は None。
+    workspaces は npm/yarn/pnpm のいずれも基本ルート node_modules にホイストする
+    ため、project_path はモノレポルートを渡す前提。
+    """
+    pkg_file = project_path / 'node_modules' / name / 'package.json'
+    if not pkg_file.exists():
+        return None
+    try:
+        data = json.loads(pkg_file.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return None
+    v = data.get('version') if isinstance(data, dict) else None
+    return v if isinstance(v, str) and v else None
+
+
+def attach_installed_info(project_path: Path, deps: list[dict]) -> list[dict]:
+    """各 dep に `installed_version` (str|None) と `installed` (bool) を付与する。
+
+    deps を in-place で書き換えつつ同オブジェクトを返す (利便性のため)。
+    package.json の spec しか持たない deps を、実 node_modules の状態と照合する。
+    """
+    for d in deps:
+        v = read_installed_version(project_path, d.get('name', ''))
+        d['installed_version'] = v
+        d['installed'] = v is not None
+    return deps
+
+
 def write_dependency(project_path: Path, name: str, version: str, dev: bool) -> None:
     """package.json の dependencies / devDependencies にエントリを追加または更新する。"""
     pkg_file = project_path / 'package.json'
