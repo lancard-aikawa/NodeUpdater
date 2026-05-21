@@ -67,6 +67,9 @@ class App(tk.Tk):
         self.cooldown_spin.pack(side='left')
         ttk.Label(top, text='日').pack(side='left', padx=(2, 0))
 
+        self.debug_log_btn = ttk.Button(top, text='Debug Log…', command=self._open_debug_log)
+        self.debug_log_btn.pack(side='left', padx=(12, 0))
+
         self.status_label = ttk.Label(top, text='', foreground='#0a6')
         self.status_label.pack(side='right')
         self.progress = ttk.Progressbar(top, mode='indeterminate', length=140)
@@ -260,6 +263,11 @@ class App(tk.Tk):
             self.after(0, finish)
 
         threading.Thread(target=runner, daemon=True).start()
+
+    # ── Debug Log dialog ────────────────────────────────────────────────
+    def _open_debug_log(self) -> None:
+        from shared.debug_log_dialog import DebugLogDialog
+        DebugLogDialog(self, app_name='PypkgUpdater')
 
     # ── Cooldown ─────────────────────────────────────────────────────────
     def _on_cooldown_changed(self) -> None:

@@ -6,3 +6,4 @@ dist/
 cache/
 state.json
 history/
+debug.log

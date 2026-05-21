@@ -7,12 +7,16 @@ pip / uv の `list --format=json` を呼ぶ。グローバルといっても Pyt
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
 
+from shared import debug_log
+
 
 def _run(args: list[str], timeout: int = 30) -> str | None:
+    """失敗時の診断情報を debug_log に残す (UI から Debug Log… で確認できる)。"""
     try:
         result = subprocess.run(
             args,
@@ -23,8 +27,21 @@ def _run(args: list[str], timeout: int = 30) -> str | None:
             timeout=timeout,
             shell=(sys.platform == 'win32'),
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except FileNotFoundError as e:
+        debug_log.log('pip_global._run', reason='FileNotFoundError',
+                      error=str(e), cmd=' '.join(args))
         return None
+    except subprocess.TimeoutExpired:
+        debug_log.log('pip_global._run', reason='timeout',
+                      timeout_s=timeout, cmd=' '.join(args))
+        return None
+    if not result.stdout:
+        debug_log.log('pip_global._run', reason='empty stdout',
+                      cmd=' '.join(args), rc=result.returncode,
+                      stderr_head=(result.stderr or '').strip()[:400])
+    else:
+        debug_log.log('pip_global._run', cmd=' '.join(args),
+                      rc=result.returncode, stdout_len=len(result.stdout))
     return result.stdout
 
 

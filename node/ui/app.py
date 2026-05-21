@@ -95,6 +95,9 @@ class App(tk.Tk):
         self.settings_btn = ttk.Button(top, text='Settings…', command=self._open_settings)
         self.settings_btn.pack(side='left', padx=(4, 0))
 
+        self.debug_log_btn = ttk.Button(top, text='Debug Log…', command=self._open_debug_log)
+        self.debug_log_btn.pack(side='left', padx=(4, 0))
+
         # 右側: 進捗バー + ステータスラベル
         self.status_label = ttk.Label(top, text='', foreground='#0a6')
         self.status_label.pack(side='right')
@@ -346,6 +349,10 @@ class App(tk.Tk):
     # ── 設定ダイアログ ────────────────────────────────────────────────────────
     def _open_settings(self) -> None:
         SettingsDialog(self)
+
+    def _open_debug_log(self) -> None:
+        from shared.debug_log_dialog import DebugLogDialog
+        DebugLogDialog(self, app_name='NodeUpdater')
 
     def _open_history(self) -> None:
         if not self.current_project:
