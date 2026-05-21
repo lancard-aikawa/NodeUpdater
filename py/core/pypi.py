@@ -200,11 +200,21 @@ def fetch_one(
         _first_upload_time(releases.get(latest_major)) if latest_major else None
     )
 
-    # 「spec が許す最高版」: requirements.txt / pyproject.toml の operator chain
-    # (例 '>=2.0,<3' や '~=2.31') を満たす最高安定版を計算する。spec が無ければ None。
-    allowed_latest = pep440.latest_matching(eligible, spec) if spec else None
+    # 「spec が許す最高版」: 3 系統に分岐する。
+    #   1. spec が None / 空 / '*'/'any'/'latest' (wildcard) → 制約なしなので絶対最新
+    #   2. spec が我々の matcher で解釈可能 → matches_specifier で絞った最高安定版
+    #   3. 解釈不能 (`^1.0` / `1.0 || 2` / URL refs など A の範囲外) → '?' sentinel
+    # '?' の場合 UI 側でツールチップに raw spec を出して「手動確認」を促す。
+    if spec is None or pep440.is_wildcard_spec(spec):
+        allowed_latest = latest
+    elif pep440.parseable(spec):
+        allowed_latest = pep440.latest_matching(eligible, spec)
+    else:
+        allowed_latest = '?'
     allowed_latest_published_at = (
-        _first_upload_time(releases.get(allowed_latest)) if allowed_latest else None
+        _first_upload_time(releases.get(allowed_latest))
+        if allowed_latest and allowed_latest != '?'
+        else None
     )
 
     deprecated = _yanked_reason(releases.get(current_version)) if current_version else None

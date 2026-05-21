@@ -8,6 +8,12 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
+from shared import ui_tooltip
+
+# Wanted セルが解釈不能 spec の時に入れる sentinel 文字列。
+# pypi.fetch_one 側と取り決め。表示はそのまま `?` として出す。
+UNPARSEABLE_SPEC_MARKER = '?'
+
 _STATUS_COLORS = {
     'both':    '#ffd0d0',  # 赤系: major + minor 両方ある
     'major':   '#ffe0c0',  # オレンジ: メジャー更新あり
@@ -112,12 +118,18 @@ class PackageTable(ttk.Frame):
         self.grid_columnconfigure(0, weight=1)
 
         tree.bind('<<TreeviewSelect>>', self._on_select)
+        # Wanted カラムの '?' セルに hover ツールチップ (raw spec 表示)
+        tree.bind('<Motion>', self._on_motion)
+        tree.bind('<Leave>', self._on_leave_tree)
         self.tree = tree
         self._row_data: dict[str, dict] = {}
         self._all_packages: list[dict] = []
         self._filter_query = ''
         self._filter_status: str | None = None
         self._filter_dev_only = False
+        # 現在表示中のセルツールチップ (Toplevel) と対象キー
+        self._cell_tip: tk.Toplevel | None = None
+        self._cell_tip_key: tuple[str, str] | None = None
         # 初期プリセット (App から set_view_preset で上書きされる想定)
         self.set_view_preset(DEFAULT_PRESET)
 
@@ -184,9 +196,19 @@ class PackageTable(ttk.Frame):
                 continue
             wanted = p.get('allowedLatest')
             current = p.get('current')
-            # Wanted == Current の時は冗長なので空欄に (= 上げ余地なし)
-            wanted_display = wanted if wanted and wanted != current else ''
-            wanted_age = self._age_text(p.get('allowedLatestAgeInDays')) if wanted_display else ''
+            # Wanted セルの表示ルール:
+            #   '?'        → 解釈不能 (そのまま表示; hover で raw spec ツールチップ)
+            #   == current → 空欄 (上げ余地なし)
+            #   それ以外    → version 文字列
+            if wanted == UNPARSEABLE_SPEC_MARKER:
+                wanted_display = UNPARSEABLE_SPEC_MARKER
+                wanted_age = ''
+            elif wanted and wanted != current:
+                wanted_display = wanted
+                wanted_age = self._age_text(p.get('allowedLatestAgeInDays'))
+            else:
+                wanted_display = ''
+                wanted_age = ''
             iid = self.tree.insert('', 'end', values=(
                 p.get('name', ''),
                 current or '-',
@@ -222,3 +244,85 @@ class PackageTable(ttk.Frame):
         pkg = self.get_selected()
         if pkg:
             self.on_select(pkg)
+
+    # ── Wanted セル '?' のホバーツールチップ ─────────────────────────
+    def _resolve_column_name(self, col_id: str) -> str | None:
+        """`#1` 形式の column id を 'name'/'wanted' 等の論理名に変換。
+
+        Treeview の displaycolumns 設定を考慮する。
+        """
+        if not col_id or not col_id.startswith('#'):
+            return None
+        try:
+            idx = int(col_id[1:]) - 1
+        except ValueError:
+            return None
+        if idx < 0:
+            return None
+        cols = self.tree.cget('displaycolumns')
+        if not isinstance(cols, tuple) or cols == ('#all',) or not cols:
+            cols = self.COLUMNS
+        if idx >= len(cols):
+            return None
+        return cols[idx]
+
+    def _on_motion(self, event) -> None:
+        row_id = self.tree.identify_row(event.y)
+        col_id = self.tree.identify_column(event.x)
+        if not row_id or not col_id:
+            self._hide_cell_tip()
+            return
+        col_name = self._resolve_column_name(col_id)
+        # ツールチップ対象は今のところ Wanted の '?' セルのみ
+        if col_name != 'wanted':
+            self._hide_cell_tip()
+            return
+        try:
+            value = self.tree.set(row_id, 'wanted')
+        except tk.TclError:
+            self._hide_cell_tip()
+            return
+        if value != UNPARSEABLE_SPEC_MARKER:
+            self._hide_cell_tip()
+            return
+        key = (row_id, col_name)
+        if key == self._cell_tip_key:
+            return  # 既に同じセルでチップを出している (再描画しない = ちらつき防止)
+        self._hide_cell_tip()
+        pkg = self._row_data.get(row_id) or {}
+        spec = pkg.get('spec') or '(unknown)'
+        text = (
+            f'spec を解釈できませんでした:\n'
+            f'  {spec}\n\n'
+            f'対応している operator: == ~= >= <= > < != (カンマで AND)。\n'
+            f'未対応の例: 1.0 || 2.0 / URL refs / 範囲 OR など。\n'
+            f'手動で確認してください。'
+        )
+        bbox = self.tree.bbox(row_id, 'wanted')
+        if bbox:
+            x, y, _w, h = bbox
+            rx = self.tree.winfo_rootx() + x
+            ry = self.tree.winfo_rooty() + y + h + 2
+        else:
+            rx = self.tree.winfo_pointerx() + 12
+            ry = self.tree.winfo_pointery() + 12
+        try:
+            tw = ui_tooltip.make_bubble(self.tree, text)
+            tw.wm_geometry(f'+{rx}+{ry}')
+            self._cell_tip = tw
+            self._cell_tip_key = key
+        except tk.TclError:
+            self._cell_tip = None
+            self._cell_tip_key = None
+
+    def _on_leave_tree(self, _event) -> None:
+        self._hide_cell_tip()
+
+    def _hide_cell_tip(self) -> None:
+        if self._cell_tip is not None:
+            try:
+                self._cell_tip.destroy()
+            except tk.TclError:
+                pass
+        self._cell_tip = None
+        self._cell_tip_key = None

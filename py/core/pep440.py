@@ -296,3 +296,42 @@ def latest_matching(all_versions: list[str], spec: str | None) -> str | None:
         return None
     parsed.sort(key=lambda t: t[1], reverse=True)
     return parsed[0][0]
+
+
+def parseable(spec: str | None) -> bool:
+    """spec が我々の matcher で扱える形式かどうか。
+
+    None / 空文字は False を返す (= 「制約なし」とは別物として呼び出し側が扱う)。
+    URL 参照や `1.0 || 2.0` のような未対応構文は False。
+    operator + version の単純な AND (`,` 区切り) のみ True。
+    """
+    if not spec or not isinstance(spec, str):
+        return False
+    s = spec.strip()
+    if not s or s in ('*', 'any', 'latest'):
+        return False  # wildcard 系は別扱い (呼び出し側で「絶対最新」と解釈)
+    for chunk in s.split(','):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        m = _OP_TARGET_RE.match(chunk)
+        if not m:
+            return False
+        # target が parse できるかも検証 (wildcard は ==X.Y.* のみ許す)
+        target = m.group('target')
+        if target.endswith('.*'):
+            if m.group('op') != '==':
+                return False
+            if not parse(target[:-2]):
+                return False
+        else:
+            if not parse(target):
+                return False
+    return True
+
+
+def is_wildcard_spec(spec: str | None) -> bool:
+    """`*` / `any` / `latest` / 空文字のように「全バージョン許可」を意味する spec か。"""
+    if not spec or not isinstance(spec, str):
+        return False
+    return spec.strip() in ('*', 'any', 'latest')

@@ -59,21 +59,8 @@ class Tooltip:
             y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
         except tk.TclError:
             return  # ウィジェットが既に破棄されているケース
-        tw = tk.Toplevel(self.widget)
-        tw.wm_overrideredirect(True)  # ウィンドウ装飾なし
+        tw = make_bubble(self.widget, self.text, wraplength=self.wraplength)
         tw.wm_geometry(f'+{x}+{y}')
-        tk.Label(
-            tw,
-            text=self.text,
-            justify='left',
-            background='#ffffe0',
-            foreground='#000000',
-            relief='solid',
-            borderwidth=1,
-            font=('TkDefaultFont', 9),
-            padx=6, pady=4,
-            wraplength=self.wraplength,
-        ).pack()
         self._tipwindow = tw
 
     def _hide(self) -> None:
@@ -101,3 +88,26 @@ def attach(
 ) -> Tooltip:
     """ショートカット: Tooltip(widget, text) のインスタンスを返す。"""
     return Tooltip(widget, text, delay_ms=delay_ms, wraplength=wraplength)
+
+
+def make_bubble(parent: tk.Misc, text: str, wraplength: int = 360) -> tk.Toplevel:
+    """装飾なしの黄色いバブル Toplevel を作って返す (位置・破棄は呼び出し側責任)。
+
+    Tooltip クラスは widget 1 個 + hover delay 向け。Treeview のセルみたいに
+    「位置が動的に変わるバブル」が欲しい時はこの low-level 関数を直接使う。
+    """
+    tw = tk.Toplevel(parent)
+    tw.wm_overrideredirect(True)
+    tk.Label(
+        tw,
+        text=text,
+        justify='left',
+        background='#ffffe0',
+        foreground='#000000',
+        relief='solid',
+        borderwidth=1,
+        font=('TkDefaultFont', 9),
+        padx=6, pady=4,
+        wraplength=wraplength,
+    ).pack()
+    return tw

@@ -520,16 +520,24 @@ class App(tk.Tk):
         #   'wanted' = requirements の spec が許す最高版 (Wanted 列の値)
         #   'minor'  = 同 major 内の最高 (spec 無視)
         #   'major'  = より上の major (spec 無視)
-        # 'wanted' は current と一致する (= 既に上限) ものをスキップする。
+        # 'wanted' では以下もスキップ:
+        #   - current と同じ (= 既に上限)
+        #   - '?' (= spec 解釈不能なので install 対象を決められない)
         key_map = {'wanted': 'allowedLatest', 'minor': 'latestMinor', 'major': 'latestMajor'}
         key = key_map.get(target, 'latestMinor')
         targets, skipped = [], []
         for p in selected:
             v = p.get(key)
-            if v and (target != 'wanted' or v != p.get('current')):
-                targets.append((p['name'], v))
+            if target == 'wanted':
+                if v and v != '?' and v != p.get('current'):
+                    targets.append((p['name'], v))
+                else:
+                    skipped.append(p['name'])
             else:
-                skipped.append(p['name'])
+                if v:
+                    targets.append((p['name'], v))
+                else:
+                    skipped.append(p['name'])
 
         if not targets:
             label_map = {
