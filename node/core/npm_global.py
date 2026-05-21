@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from shared import debug_log
@@ -51,20 +52,24 @@ def _run(args: list[str], timeout: int = 90) -> str | None:
     """
     global last_error
     resolved_head = _resolve_npm_command()
+    cmd_str = ' '.join(args)
     if not resolved_head:
-        last_error = {
-            'reason': 'npm not found in PATH',
-            'cmd': ' '.join(args),
-        }
+        last_error = {'reason': 'npm not found in PATH', 'cmd': cmd_str}
         debug_log.log(
             'npm_global._run',
+            level='ERROR',
+            summary=f'npm not found: {cmd_str}',
             reason='npm not found in PATH',
-            cmd=' '.join(args),
-            path_env=(os.environ.get('PATH') or '')[:1000],
-            which_npm=shutil.which('npm'),
+            detail={
+                'cmd': cmd_str,
+                'PATH': os.environ.get('PATH') or '',
+                'which_npm': shutil.which('npm'),
+            },
         )
         return None
     full = resolved_head + args[1:]
+    full_cmd_str = ' '.join(full)
+    t0 = time.monotonic()
     try:
         result = subprocess.run(
             full,
@@ -77,29 +82,58 @@ def _run(args: list[str], timeout: int = 90) -> str | None:
             shell=False,
         )
     except FileNotFoundError as e:
-        last_error = {'reason': f'FileNotFoundError: {e}', 'cmd': ' '.join(full)}
-        debug_log.log('npm_global._run', reason='FileNotFoundError',
-                      error=str(e), cmd=' '.join(full))
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        last_error = {'reason': f'FileNotFoundError: {e}', 'cmd': full_cmd_str}
+        debug_log.log(
+            'npm_global._run',
+            level='ERROR',
+            summary=f'spawn 失敗 ({duration_ms}ms): {cmd_str}',
+            reason='FileNotFoundError', duration_ms=duration_ms,
+            detail={'cmd': full_cmd_str, 'error': str(e)},
+        )
         return None
     except subprocess.TimeoutExpired:
-        last_error = {'reason': f'Timed out after {timeout}s', 'cmd': ' '.join(full)}
-        debug_log.log('npm_global._run', reason='timeout',
-                      timeout_s=timeout, cmd=' '.join(full))
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        last_error = {'reason': f'Timed out after {timeout}s', 'cmd': full_cmd_str}
+        debug_log.log(
+            'npm_global._run',
+            level='ERROR',
+            summary=f'timeout {timeout}s: {cmd_str}',
+            reason='timeout', timeout_s=timeout, duration_ms=duration_ms,
+            detail={'cmd': full_cmd_str},
+        )
         return None
+    duration_ms = int((time.monotonic() - t0) * 1000)
     # 失敗時の診断情報を残す。exit_code != 0 でも stdout に JSON があれば成功扱い。
     if not result.stdout:
         last_error = {
             'reason': f'empty stdout (rc={result.returncode})',
-            'cmd': ' '.join(full),
+            'cmd': full_cmd_str,
             'stderr': (result.stderr or '').strip()[:400],
         }
-        debug_log.log('npm_global._run', reason='empty stdout',
-                      cmd=' '.join(full), rc=result.returncode,
-                      stderr_head=(result.stderr or '').strip()[:400])
+        debug_log.log(
+            'npm_global._run',
+            level='WARN',
+            summary=f'empty stdout rc={result.returncode} ({duration_ms}ms): {cmd_str}',
+            reason='empty stdout', rc=result.returncode, duration_ms=duration_ms,
+            detail={
+                'cmd': full_cmd_str,
+                'stderr': (result.stderr or '').strip(),
+            },
+        )
     else:
         last_error = None
-        debug_log.log('npm_global._run', cmd=' '.join(full),
-                      rc=result.returncode, stdout_len=len(result.stdout))
+        debug_log.log(
+            'npm_global._run',
+            level='INFO',
+            summary=f'rc={result.returncode} ({duration_ms}ms): {cmd_str}',
+            rc=result.returncode, duration_ms=duration_ms, stdout_len=len(result.stdout),
+            detail={
+                'cmd': full_cmd_str,
+                'stdout_head': result.stdout[:2000],
+                'stderr': (result.stderr or '').strip(),
+            },
+        )
     return result.stdout
 
 
@@ -150,8 +184,13 @@ def _list_via_filesystem(root: str) -> list[dict]:
     root_path = Path(root)
     if not root_path.is_dir():
         last_error = {'reason': f'npm root -g not a directory: {root}'}
-        debug_log.log('npm_global._list_via_filesystem',
-                      reason='root path not a directory', root=root)
+        debug_log.log(
+            'npm_global._list_via_filesystem',
+            level='WARN',
+            summary=f'root path not a directory: {root}',
+            reason='root path not a directory',
+            detail={'root': root},
+        )
         return []
     packages: list[dict] = []
     try:
@@ -174,12 +213,22 @@ def _list_via_filesystem(root: str) -> list[dict]:
                     packages.append(pkg)
     except OSError as e:
         last_error = {'reason': f'iterdir failed: {e}'}
-        debug_log.log('npm_global._list_via_filesystem',
-                      reason='iterdir failed', error=str(e), root=root)
+        debug_log.log(
+            'npm_global._list_via_filesystem',
+            level='ERROR',
+            summary=f'iterdir 失敗: {e}',
+            reason='iterdir failed',
+            detail={'root': root, 'error': str(e)},
+        )
         return []
     last_error = None
-    debug_log.log('npm_global._list_via_filesystem',
-                  root=root, count=len(packages))
+    debug_log.log(
+        'npm_global._list_via_filesystem',
+        level='INFO',
+        summary=f'filesystem 走査 {len(packages)} 件: {root}',
+        count=len(packages),
+        detail={'root': root, 'names': [p['name'] for p in packages]},
+    )
     return packages
 
 

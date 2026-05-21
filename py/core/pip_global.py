@@ -11,12 +11,15 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 from shared import debug_log
 
 
 def _run(args: list[str], timeout: int = 30) -> str | None:
     """失敗時の診断情報を debug_log に残す (UI から Debug Log… で確認できる)。"""
+    cmd_str = ' '.join(args)
+    t0 = time.monotonic()
     try:
         result = subprocess.run(
             args,
@@ -28,20 +31,49 @@ def _run(args: list[str], timeout: int = 30) -> str | None:
             shell=(sys.platform == 'win32'),
         )
     except FileNotFoundError as e:
-        debug_log.log('pip_global._run', reason='FileNotFoundError',
-                      error=str(e), cmd=' '.join(args))
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        debug_log.log(
+            'pip_global._run',
+            level='ERROR',
+            summary=f'spawn 失敗 ({duration_ms}ms): {cmd_str}',
+            reason='FileNotFoundError', duration_ms=duration_ms,
+            detail={'cmd': cmd_str, 'error': str(e)},
+        )
         return None
     except subprocess.TimeoutExpired:
-        debug_log.log('pip_global._run', reason='timeout',
-                      timeout_s=timeout, cmd=' '.join(args))
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        debug_log.log(
+            'pip_global._run',
+            level='ERROR',
+            summary=f'timeout {timeout}s: {cmd_str}',
+            reason='timeout', timeout_s=timeout, duration_ms=duration_ms,
+            detail={'cmd': cmd_str},
+        )
         return None
+    duration_ms = int((time.monotonic() - t0) * 1000)
     if not result.stdout:
-        debug_log.log('pip_global._run', reason='empty stdout',
-                      cmd=' '.join(args), rc=result.returncode,
-                      stderr_head=(result.stderr or '').strip()[:400])
+        debug_log.log(
+            'pip_global._run',
+            level='WARN',
+            summary=f'empty stdout rc={result.returncode} ({duration_ms}ms): {cmd_str}',
+            reason='empty stdout', rc=result.returncode, duration_ms=duration_ms,
+            detail={
+                'cmd': cmd_str,
+                'stderr': (result.stderr or '').strip(),
+            },
+        )
     else:
-        debug_log.log('pip_global._run', cmd=' '.join(args),
-                      rc=result.returncode, stdout_len=len(result.stdout))
+        debug_log.log(
+            'pip_global._run',
+            level='INFO',
+            summary=f'rc={result.returncode} ({duration_ms}ms): {cmd_str}',
+            rc=result.returncode, duration_ms=duration_ms, stdout_len=len(result.stdout),
+            detail={
+                'cmd': cmd_str,
+                'stdout_head': result.stdout[:2000],
+                'stderr': (result.stderr or '').strip(),
+            },
+        )
     return result.stdout
 
 
