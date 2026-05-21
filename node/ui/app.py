@@ -14,6 +14,7 @@ from shared import (
     osv,
     state,
     ui_tabs,
+    ui_tooltip,
 )
 from node.core import (
     bun_lock,
@@ -128,7 +129,10 @@ class App(tk.Tk):
                          command=lambda: self._show_changelog('global'))
         b6d.pack(side='left', padx=(4, 0))
         self.global_table = PackageTable(self.tab_global, on_select=self._on_row_select)
-        self._make_filter_bar(self.tab_global, self.global_table, key='global')
+        # Global は spec が無いため Wanted 列は常に空。既定は Latest にしておく。
+        self._make_filter_bar(
+            self.tab_global, self.global_table, key='global', default_preset='Latest',
+        )
         self.global_table.pack(fill='both', expand=True, padx=4, pady=4)
 
         # Project tab (Project と Audit は対で隣接)
@@ -140,9 +144,12 @@ class App(tk.Tk):
         b1.pack(side='left')
         b2 = ttk.Button(project_bar, text='Force Refresh', command=lambda: self.refresh_project(force=True))
         b2.pack(side='left', padx=(4, 0))
+        b3w = ttk.Button(project_bar, text='Install Wanted…',
+                         command=lambda: self._install_selected('project', 'wanted'))
+        b3w.pack(side='left', padx=(12, 0))
         b3a = ttk.Button(project_bar, text='Install Minor Up…',
                          command=lambda: self._install_selected('project', 'minor'))
-        b3a.pack(side='left', padx=(12, 0))
+        b3a.pack(side='left', padx=(4, 0))
         b3b = ttk.Button(project_bar, text='Install Major Up…',
                          command=lambda: self._install_selected('project', 'major'))
         b3b.pack(side='left', padx=(4, 0))
@@ -239,7 +246,7 @@ class App(tk.Tk):
         self.audit_text.pack(fill='both', expand=True, padx=4, pady=4)
 
         self._action_buttons.extend(
-            [b1, b2, b3, b3a, b3b, b3c, b4, b5, b6, b6b, b6c, b6d,
+            [b1, b2, b3, b3w, b3a, b3b, b3c, b4, b5, b6, b6b, b6c, b6d,
              b7, b7b, b8, b9, b10,
              b_exp_osv, b_exp_npm,
              b_tree_refresh, b_tree_expand, b_tree_collapse]
@@ -256,8 +263,15 @@ class App(tk.Tk):
         ('Unknown', 'unknown'),
     ]
 
-    def _make_filter_bar(self, parent, table: PackageTable, key: str) -> None:
-        """Project / Global タブに名前検索・状態・dev フィルタの行を追加。"""
+    def _make_filter_bar(
+        self, parent, table: PackageTable, key: str,
+        default_preset: str = 'Wanted',
+    ) -> None:
+        """Project / Global タブに名前検索・状態・dev フィルタの行を追加。
+
+        default_preset で View プリセットの初期値を指定 (Global は spec が無いので Latest 推奨)。
+        """
+        from node.ui.table import VIEW_PRESETS, VIEW_PRESET_DESCRIPTIONS  # local import
         bar = ttk.Frame(parent, padding=(4, 2))
         bar.pack(fill='x')
 
@@ -279,6 +293,25 @@ class App(tk.Tk):
 
         count_label = ttk.Label(bar, text='', foreground='#666')
         count_label.pack(side='right')
+
+        # View プリセット radio (列が多いので task 別に切替える)
+        view_var = tk.StringVar(value=default_preset)
+        for label in reversed(list(VIEW_PRESETS.keys())):
+            rb = ttk.Radiobutton(
+                bar, text=label, value=label, variable=view_var,
+                command=lambda l=label: table.set_view_preset(l),
+            )
+            rb.pack(side='right')
+            desc = VIEW_PRESET_DESCRIPTIONS.get(label)
+            if desc:
+                ui_tooltip.attach(rb, desc)
+        view_label = ttk.Label(bar, text='View:', foreground='#666')
+        view_label.pack(side='right', padx=(16, 4))
+        ui_tooltip.attach(
+            view_label,
+            '表示列のプリセットを切替えます。データ再取得は不要で、列の見え方だけ変わります。',
+        )
+        table.set_view_preset(default_preset)
 
         def label_to_status(label: str) -> str | None:
             for lab, val in self._STATUS_OPTIONS:
@@ -468,7 +501,7 @@ class App(tk.Tk):
             def on_prog(done_count, total):
                 self._post_progress(done_count, total, 'Fetching from npm registry')
             infos = npm_registry.fetch_many(
-                [(d['name'], d['version']) for d in deps],
+                [(d['name'], d['version'], d.get('spec')) for d in deps],
                 on_progress=on_prog,
                 cooldown_days=cooldown,
             )
@@ -523,7 +556,7 @@ class App(tk.Tk):
             def on_prog(done_count, t):
                 self._post_progress(done_count, t, 'Fetching from npm registry')
             infos = npm_registry.fetch_many(
-                [(d['name'], d['version']) for d in deps],
+                [(d['name'], d['version'], d.get('spec')) for d in deps],
                 on_progress=on_prog,
                 cooldown_days=cooldown,
             )
@@ -938,17 +971,36 @@ class App(tk.Tk):
             messagebox.showinfo('NodeUpdater', 'Choose a project first.')
             return
 
-        key = 'latestMinor' if target == 'minor' else 'latestMajor'
+        # target:
+        #   'wanted' = package.json の spec が許す最高版 (Wanted 列の値)
+        #   'minor'  = 同 major 内の最高 (spec 無視)
+        #   'major'  = より上の major (spec 無視)
+        # 'wanted' では以下もスキップ:
+        #   - current と同じ (= 既に上限)
+        #   - '?' (= spec 解釈不能なので install 対象を決められない)
+        key_map = {'wanted': 'allowedLatest', 'minor': 'latestMinor', 'major': 'latestMajor'}
+        key = key_map.get(target, 'latestMinor')
         targets, skipped = [], []
         for p in selected:
             v = p.get(key)
-            if v:
-                targets.append((p['name'], v))
+            if target == 'wanted':
+                if v and v != '?' and v != p.get('current'):
+                    targets.append((p['name'], v))
+                else:
+                    skipped.append(p['name'])
             else:
-                skipped.append(p['name'])
+                if v:
+                    targets.append((p['name'], v))
+                else:
+                    skipped.append(p['name'])
 
         if not targets:
-            label = 'Minor (same major)' if target == 'minor' else 'Major up'
+            label_map = {
+                'wanted': 'Wanted (within spec)',
+                'minor': 'Minor (same major)',
+                'major': 'Major up',
+            }
+            label = label_map.get(target, target)
             messagebox.showinfo(
                 'NodeUpdater', f'選択された {len(selected)} 件すべてに {label} の更新候補はありません。'
             )
@@ -959,7 +1011,11 @@ class App(tk.Tk):
         specs = [f'{n}@{v}' for n, v in targets]
         # global は常に npm、project は lockfile から PM を検出
         pm = 'npm' if is_global else pkg_manager.detect(self.current_project)
-        target_label = 'Install Minor Up' if target == 'minor' else 'Install Major Up'
+        target_label = {
+            'wanted': 'Install Wanted (within spec)',
+            'minor': 'Install Minor Up',
+            'major': 'Install Major Up',
+        }.get(target, target)
 
         # 履歴用に現行版を取得 (selection から)
         from_versions = {p['name']: p.get('current') for p in selected}
@@ -1022,18 +1078,22 @@ def _build_package_list(deps: list[dict], infos: dict[str, dict]) -> list[dict]:
         out.append({
             'name': d['name'],
             'current': d.get('version'),
+            'spec': d.get('spec'),
             'latest': latest,
             'latestMinor': latest_minor,
             'latestMajor': latest_major,
+            'allowedLatest': info.get('allowedLatest'),
             'status': status,
             'dev': d.get('dev', False),
             'currentPublishedAt': info.get('currentPublishedAt'),
             'latestPublishedAt': info.get('latestPublishedAt'),
             'latestMinorPublishedAt': info.get('latestMinorPublishedAt'),
             'latestMajorPublishedAt': info.get('latestMajorPublishedAt'),
+            'allowedLatestPublishedAt': info.get('allowedLatestPublishedAt'),
             'currentAgeInDays': info.get('currentAgeInDays'),
             'latestMinorAgeInDays': info.get('latestMinorAgeInDays'),
             'latestMajorAgeInDays': info.get('latestMajorAgeInDays'),
+            'allowedLatestAgeInDays': info.get('allowedLatestAgeInDays'),
             'provenance': info.get('provenance'),
             'deprecated': info.get('deprecated'),
             'latestDeprecated': info.get('latestDeprecated'),

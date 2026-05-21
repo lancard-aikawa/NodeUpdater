@@ -24,13 +24,28 @@ def read(project_path: Path) -> dict:
 
 
 def collect_dependencies(project_path: Path) -> list[dict]:
-    """[{name, version, dev}, ...] の形で全依存を列挙。version は正規化済み。"""
+    """[{name, version, spec, dev}, ...] の形で全依存を列挙。
+
+    version は正規化 (数値のみ; UI の Current 表示用)、spec は package.json の
+    raw 文字列 (`^1.2.3` / `~1.0` / `>=1 <2` / `file:./pkg` 等そのまま)。
+    spec があれば Wanted 列の計算に使われる。
+    """
     parsed = read(project_path)
     out = []
     for name, raw in parsed['dependencies'].items():
-        out.append({'name': name, 'version': semver.normalize(raw), 'dev': False})
+        out.append({
+            'name': name,
+            'version': semver.normalize(raw),
+            'spec': raw if isinstance(raw, str) and raw else None,
+            'dev': False,
+        })
     for name, raw in parsed['devDependencies'].items():
-        out.append({'name': name, 'version': semver.normalize(raw), 'dev': True})
+        out.append({
+            'name': name,
+            'version': semver.normalize(raw),
+            'spec': raw if isinstance(raw, str) and raw else None,
+            'dev': True,
+        })
     return out
 
 
@@ -145,9 +160,19 @@ def collect_dependencies_at(project_path: Path, workspace_path: str = '') -> lis
         if isinstance(ws, dict):
             out = []
             for name, raw in (ws.get('dependencies') or {}).items():
-                out.append({'name': name, 'version': semver.normalize(raw), 'dev': False})
+                out.append({
+                    'name': name,
+                    'version': semver.normalize(raw),
+                    'spec': raw if isinstance(raw, str) and raw else None,
+                    'dev': False,
+                })
             for name, raw in (ws.get('devDependencies') or {}).items():
-                out.append({'name': name, 'version': semver.normalize(raw), 'dev': True})
+                out.append({
+                    'name': name,
+                    'version': semver.normalize(raw),
+                    'spec': raw if isinstance(raw, str) and raw else None,
+                    'dev': True,
+                })
             return out
 
     # サブフォルダの package.json
