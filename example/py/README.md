@@ -22,9 +22,9 @@
 ### dependency-groups (PEP 735)
 - `lint`: ruff → dev=true (heuristic で lint をdev扱い)
 
-## Safe Install の確認手順
+## クールダウンインストールの確認手順
 
-1. PypkgUpdater を起動 → **Global タブ** で `安全インストール…`
+1. PypkgUpdater を起動 → **Global タブ** で `クールダウンインストール…`
 2. Package 欄に `requests` 等を入力 → `Resolve`
 3. cooldown 経過済みの版が表示されることを確認
 4. PyPI latest 行に **元の info.version** が並び、cutoff より新しければ

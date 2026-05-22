@@ -1,4 +1,4 @@
-"""Safe Install ダイアログ: 単一パッケージを cooldown 適用後の版で導入する。
+"""クールダウンインストールダイアログ: 単一パッケージを cooldown 適用後の版で導入する。
 
 `InstallDialog` は「既存テーブルから選んだ複数 spec を一括プレビュー」用だが、
 こちらは「未インストールのパッケージを 1 つずつ、cooldown 経過済みの版で安全に
@@ -62,7 +62,7 @@ class SafeInstallDialog(tk.Toplevel):
         scope_label = 'Global (-g)' if global_install else f'Project: {cwd or "(cwd)"}'
         ttk.Label(
             body,
-            text=f'Safe Install  [{pm}]  {scope_label}  /  cooldown={cooldown_days}日',
+            text=f'クールダウンインストール  [{pm}]  {scope_label}  /  cooldown={cooldown_days}日',
             font=('TkDefaultFont', 10, 'bold'),
         ).pack(anchor='w')
 

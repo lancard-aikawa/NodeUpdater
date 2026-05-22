@@ -14,11 +14,11 @@
 - `left-pad: 1.3.0` — 固定版
 - `@types/node: ^20.0.0` — scoped + caret
 - `typescript: ^5.0.0` — devDependencies
-- `eslint: latest` — `latest` tag (Safe Install では cooldown 適用後の latest になる)
+- `eslint: latest` — `latest` tag (クールダウンインストールでは cooldown 適用後の latest になる)
 
-## Safe Install の確認手順
+## クールダウンインストールの確認手順
 
-1. NodeUpdater を起動し、**Global タブ** で `Safe Install…` を開く
+1. NodeUpdater を起動し、**Global タブ** で `クールダウンインストール…` を開く
 2. Package 欄に `lodash` 等を入力 → `Resolve`
 3. Cooldown が利いた版 (例: 7 日以上前の最新) が表示されることを確認
 4. `npm latest` 行に **元の dist-tags.latest** が並び、cutoff より新しければ

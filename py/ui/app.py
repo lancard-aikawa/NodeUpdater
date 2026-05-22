@@ -115,16 +115,17 @@ class App(tk.Tk):
                             command=lambda: self._install_selected('global', 'major'))
         ui_tooltip.attach(self._btn_glob_major, 'Install Major Up: 次 major へ更新 (Breaking Change の可能性)')
         self._btn_glob_major.pack(side='left', padx=(4, 0))
-        gb_safe = ttk.Button(gbar, text='安全インストール…',
+        gb_safe = ttk.Button(gbar, text='クールダウンインストール…',
                              command=self._safe_install_global)
         ui_tooltip.attach(
             gb_safe,
-            'Safe Install…: 未インストールパッケージを cooldown 適用後の版で個別に追加',
+            'クールダウンインストール…: '
+            '未インストールパッケージを cooldown N 日以内の版を除外して個別に追加',
         )
         gb_safe.pack(side='left', padx=(4, 0))
-        gb3 = ttk.Button(gbar, text='PyPIで開く',
+        gb3 = ttk.Button(gbar, text='公開ページを開く',
                          command=lambda: self._open_selected_pypi('global'))
-        ui_tooltip.attach(gb3, 'Open on PyPI: 選択行のパッケージページをブラウザで開く')
+        ui_tooltip.attach(gb3, '公開ページを開く (Open on PyPI): pypi.org の選択パッケージページをブラウザで開く')
         gb3.pack(side='left', padx=(12, 0))
         # Global は spec が無いため Wanted 列は意味を持たない。Wanted preset と
         # 'All' preset 内の wanted/age_wnt 列は VIEW_PRESETS_GLOBAL で除外している。
@@ -160,17 +161,18 @@ class App(tk.Tk):
                             command=lambda: self._install_selected('project', 'major'))
         ui_tooltip.attach(self._btn_proj_major, 'Install Major Up: 次 major へ更新 (Breaking Change の可能性)')
         self._btn_proj_major.pack(side='left', padx=(4, 0))
-        pb_safe = ttk.Button(pbar, text='安全インストール…',
+        pb_safe = ttk.Button(pbar, text='クールダウンインストール…',
                              command=self._safe_install_project)
         ui_tooltip.attach(
             pb_safe,
-            'Safe Install…: 未導入のパッケージを cooldown 適用後の版で個別に追加 '
+            'クールダウンインストール…: '
+            '未導入のパッケージを cooldown N 日以内の版を除外して個別に追加 '
             '(uv add / poetry add / pip install -U)',
         )
         pb_safe.pack(side='left', padx=(4, 0))
-        pb3 = ttk.Button(pbar, text='PyPIで開く',
+        pb3 = ttk.Button(pbar, text='公開ページを開く',
                          command=lambda: self._open_selected_pypi('project'))
-        ui_tooltip.attach(pb3, 'Open on PyPI: 選択行のパッケージページをブラウザで開く')
+        ui_tooltip.attach(pb3, '公開ページを開く (Open on PyPI): pypi.org の選択パッケージページをブラウザで開く')
         pb3.pack(side='left', padx=(12, 0))
         self.project_table = PackageTable(self.tab_project, on_select=self._on_row_select)
         self._make_filter_bar(self.tab_project, self.project_table)
@@ -181,6 +183,19 @@ class App(tk.Tk):
         self.notebook.add(self.tab_audit, text='監査 (OSV)')
         abar = ttk.Frame(self.tab_audit, padding=(4, 4))
         abar.pack(fill='x')
+        # スキャン対象スイッチ: Project (pyproject/requirements) or Global (pip list)
+        ttk.Label(abar, text='対象:').pack(side='left')
+        self._audit_scope_var = tk.StringVar(value='project')
+        rb_p = ttk.Radiobutton(
+            abar, text='プロジェクト', value='project',
+            variable=self._audit_scope_var, command=self._on_audit_scope_changed,
+        )
+        rb_p.pack(side='left', padx=(4, 0))
+        rb_g = ttk.Radiobutton(
+            abar, text='Global', value='global',
+            variable=self._audit_scope_var, command=self._on_audit_scope_changed,
+        )
+        rb_g.pack(side='left', padx=(4, 12))
         ab1 = ttk.Button(abar, text='OSVスキャン実行', command=self.run_osv)
         ui_tooltip.attach(ab1, 'Run OSV Scan: OSV.dev (PyPI ecosystem) で脆弱性スキャン')
         ab1.pack(side='left')
@@ -549,6 +564,10 @@ class App(tk.Tk):
 
     # ── OSV ─────────────────────────────────────────────────────────────
     def run_osv(self, force: bool = False) -> None:
+        scope = self._audit_scope_var.get() if hasattr(self, '_audit_scope_var') else 'project'
+        if scope == 'global':
+            self._run_osv_global(force=force)
+            return
         if not self.current_project:
             messagebox.showinfo('PypkgUpdater', '先にプロジェクトを選択してください')
             return
@@ -619,6 +638,72 @@ class App(tk.Tk):
 
         self._run_bg(work, done)
 
+    def _run_osv_global(self, force: bool = False) -> None:
+        """Global パッケージ (pip list の結果) に対する OSV スキャン。
+
+        プロジェクト選択不要。pip list の取得 + OSV.dev 問合せを行う。
+        """
+        self.audit_text.delete('1.0', 'end')
+        cache_key = 'pypi_osv_global'
+        if not force:
+            cached = cache.load(cache_key, _OSV_CACHE_TTL)
+            if cached:
+                self._last_osv = cached
+                self._render_osv(
+                    cached.get('results') or [],
+                    cached.get('scanned') or [],
+                    cached.get('source') or '(cached)',
+                )
+                self._set_status(
+                    f'OSV Global (cache): {len(cached.get("results") or [])} vulnerable / '
+                    f'{len(cached.get("scanned") or [])} scanned'
+                )
+                return
+        self._set_status('Global パッケージを列挙中 (pip list)…')
+
+        def work():
+            installed = pip_global.list_global_packages()
+            if not installed:
+                return {'packages_error': 'pip が見つからないか、パッケージがありません'}
+            deps = [
+                {'name': p['name'], 'version': p.get('version'), 'direct': True, 'dev': False}
+                for p in installed if p.get('version')
+            ]
+            if not deps:
+                return {'packages_error': 'バージョンが特定できる Global パッケージがありません'}
+            source = 'pip list'
+
+            def on_prog(done_count, total):
+                self._post_progress(done_count, total, 'OSV スキャン (Global)')
+            results = osv.query_batch(
+                [{'name': d['name'], 'version': d['version']} for d in deps],
+                on_progress=on_prog,
+                ecosystem='PyPI',
+            )
+            results.sort(key=lambda r: min(
+                (osv.SEVERITY_ORDER.get(v['severity'], 99) for v in r['vulns']),
+                default=99,
+            ))
+            return {'results': results, 'scanned': deps, 'source': source}
+
+        def done(result, err):
+            if err:
+                self._set_status(f'Error: {err}', color='#c00')
+                return
+            if result.get('packages_error'):
+                self._set_status(result['packages_error'], color='#a60')
+                self.audit_text.insert('end', result['packages_error'] + '\n')
+                return
+            cache.save(cache_key, result)
+            self._last_osv = result
+            self._render_osv(result['results'] or [], result['scanned'], result['source'])
+            self._set_status(
+                f'OSV Global: {len(result["results"] or [])} vulnerable / '
+                f'{len(result["scanned"])} scanned'
+            )
+
+        self._run_bg(work, done)
+
     def _render_osv(self, results: list[dict], scanned: list[dict], source: str) -> None:
         direct = sum(1 for d in scanned if d.get('direct'))
         self.audit_text.insert('end', f'スキャン元: {source}\n')
@@ -633,6 +718,24 @@ class App(tk.Tk):
                 self.audit_text.insert('end', f'    {v["url"]}\n')
             self.audit_text.insert('end', '\n')
 
+    def _refresh_audit_buttons(self) -> None:
+        """Audit タブのボタン状態を scope に応じて更新。
+
+        py 側は現状 `npm audit` 相当の Project 専用ボタンが無いので、いまのところ
+        実際に切替える state は無い。Global で利用不可になる将来のボタンが出てきたら
+        ここで disable する。
+        """
+        # 現状特に切替対象はないが、将来用に hook を残す
+        pass
+
+    def _on_audit_scope_changed(self) -> None:
+        """スキャン対象切替時、ボタン状態を更新し画面を一旦クリア。"""
+        self._refresh_audit_buttons()
+        self.audit_text.delete('1.0', 'end')
+        self._last_osv = None
+        scope_label = 'Global' if self._audit_scope_var.get() == 'global' else 'プロジェクト'
+        self._set_status(f'監査対象を {scope_label} に切替えました (スキャン実行待ち)')
+
     # ── PyPI ページを開く ───────────────────────────────────────────────
     def _open_selected_pypi(self, scope: str) -> None:
         table = self.project_table if scope == 'project' else self.global_table
@@ -642,7 +745,7 @@ class App(tk.Tk):
             return
         webbrowser.open(f'https://pypi.org/project/{pkg["name"]}/')
 
-    # ── Safe Install (単一パッケージ ・cooldown 適用) ──────────────────
+    # ── クールダウンインストール (単一パッケージ・cooldown 適用) ──────────
     def _safe_install_global(self) -> None:
         """未インストールパッケージを cooldown 適用後の版で 1 つずつ安全に追加。
 
@@ -651,7 +754,7 @@ class App(tk.Tk):
         """
         SafeInstallDialog(
             self,
-            title='Safe Install (Global / pip install -U)',
+            title='クールダウンインストール (Global / pip install -U)',
             pm='pip',
             global_install=True,
             cwd=None,
@@ -675,7 +778,7 @@ class App(tk.Tk):
         pm = pkg_manager.detect(self.current_project)
         SafeInstallDialog(
             self,
-            title=f'Safe Install (Project / {pm} add)',
+            title=f'クールダウンインストール (Project / {pm} add)',
             pm=pm,
             global_install=False,
             cwd=str(self.current_project),

@@ -149,16 +149,17 @@ class App(tk.Tk):
                          command=lambda: self._install_selected('global', 'major'))
         ui_tooltip.attach(self._btn_glob_major, 'Install Major Up…: 選択行を次 major へ更新 (Breaking Change の可能性)')
         self._btn_glob_major.pack(side='left', padx=(4, 0))
-        b6e = ttk.Button(global_bar, text='安全インストール…',
+        b6e = ttk.Button(global_bar, text='クールダウンインストール…',
                          command=self._safe_install_global)
         ui_tooltip.attach(
             b6e,
-            'Safe Install…: 未インストールパッケージを cooldown 適用後の版で個別に追加',
+            'クールダウンインストール…: '
+            '未インストールパッケージを cooldown N 日以内の版を除外して個別に追加',
         )
         b6e.pack(side='left', padx=(4, 0))
-        b6c = ttk.Button(global_bar, text='npmで開く',
+        b6c = ttk.Button(global_bar, text='公開ページを開く',
                          command=lambda: self._open_selected_npm('global'))
-        ui_tooltip.attach(b6c, 'Open on npm: 選択行のパッケージページをブラウザで開く')
+        ui_tooltip.attach(b6c, '公開ページを開く (Open on npm): npmjs.com の選択パッケージページをブラウザで開く')
         b6c.pack(side='left', padx=(12, 0))
         b6d = ttk.Button(global_bar, text='変更履歴…',
                          command=lambda: self._show_changelog('global'))
@@ -198,9 +199,9 @@ class App(tk.Tk):
                          command=lambda: self._install_selected('project', 'major'))
         ui_tooltip.attach(self._btn_proj_major, 'Install Major Up: 次 major へ更新 (Breaking Change の可能性)')
         self._btn_proj_major.pack(side='left', padx=(4, 0))
-        b3 = ttk.Button(project_bar, text='npmで開く',
+        b3 = ttk.Button(project_bar, text='公開ページを開く',
                         command=lambda: self._open_selected_npm('project'))
-        ui_tooltip.attach(b3, 'Open on npm: 選択行のパッケージページをブラウザで開く')
+        ui_tooltip.attach(b3, '公開ページを開く (Open on npm): npmjs.com の選択パッケージページをブラウザで開く')
         b3.pack(side='left', padx=(12, 0))
         b3c = ttk.Button(project_bar, text='変更履歴…',
                          command=lambda: self._show_changelog('project'))
@@ -270,24 +271,39 @@ class App(tk.Tk):
         self.notebook.add(self.tab_audit, text='監査 (OSV)')
         audit_bar = ttk.Frame(self.tab_audit, padding=(4, 4))
         audit_bar.pack(fill='x')
+        # スキャン対象スイッチ: Project (lockfile/package.json から) or Global (npm list -g)
+        ttk.Label(audit_bar, text='対象:').pack(side='left')
+        self._audit_scope_var = tk.StringVar(value='project')
+        rb_p = ttk.Radiobutton(
+            audit_bar, text='プロジェクト', value='project',
+            variable=self._audit_scope_var, command=self._on_audit_scope_changed,
+        )
+        rb_p.pack(side='left', padx=(4, 0))
+        rb_g = ttk.Radiobutton(
+            audit_bar, text='Global', value='global',
+            variable=self._audit_scope_var, command=self._on_audit_scope_changed,
+        )
+        rb_g.pack(side='left', padx=(4, 12))
         b7 = ttk.Button(audit_bar, text='OSVスキャン実行', command=self.run_osv)
-        ui_tooltip.attach(b7, 'Run OSV Scan: OSV.dev で脆弱性スキャン (推移依存も含む)')
+        ui_tooltip.attach(b7, 'Run OSV Scan: OSV.dev で脆弱性スキャン (Global は推移依存なし)')
         b7.pack(side='left')
         b7b = ttk.Button(audit_bar, text='強制再スキャン',
                          command=lambda: self.run_osv(force=True))
         ui_tooltip.attach(b7b, 'Force Rescan: cache を無視して OSV.dev に再問い合わせ')
         b7b.pack(side='left', padx=(4, 0))
         b8 = ttk.Button(audit_bar, text='npm audit 実行', command=self.run_npm_audit)
-        ui_tooltip.attach(b8, 'Run npm audit: npm 独自 advisory DB で脆弱性スキャン')
+        ui_tooltip.attach(b8, 'Run npm audit: npm 独自 advisory DB で脆弱性スキャン (Project のみ)')
         b8.pack(side='left', padx=(12, 0))
         b9 = ttk.Button(audit_bar, text='npm audit fix…',
                         command=lambda: self._run_audit_fix(force=False))
-        ui_tooltip.attach(b9, 'npm audit fix: 脆弱性を自動修正 (spec 内の更新のみ)')
+        ui_tooltip.attach(b9, 'npm audit fix: 脆弱性を自動修正 (Project のみ、spec 内の更新のみ)')
         b9.pack(side='left', padx=(4, 0))
         b10 = ttk.Button(audit_bar, text='npm audit fix --force…',
                          command=lambda: self._run_audit_fix(force=True))
-        ui_tooltip.attach(b10, '--force: Breaking Change を伴う major 更新も適用 (要確認)')
+        ui_tooltip.attach(b10, '--force: Breaking Change を伴う major 更新も適用 (Project のみ、要確認)')
         b10.pack(side='left', padx=(4, 0))
+        # Global 時は npm audit / fix を disable するため参照を保持
+        self._audit_npm_buttons = (b8, b9, b10)
 
         # エクスポート用の 2 段目
         export_bar = ttk.Frame(self.tab_audit, padding=(4, 0))
@@ -470,6 +486,8 @@ class App(tk.Tk):
             self._busy = False
             # busy で一律 enable に戻ったあと、選択状態に応じて install ボタンを再評価する
             self._refresh_install_buttons()
+            # 監査 scope に応じて npm audit 系の disable を再適用
+            self._refresh_audit_buttons()
 
     # ── Install ボタン状態 (選択依存) ──────────────────────────────────────
     def _refresh_install_buttons(self) -> None:
@@ -742,8 +760,13 @@ class App(tk.Tk):
         self.global_table.set_packages(payload.get('packages', []))
 
     def run_osv(self, force: bool = False) -> None:
+        scope = self._audit_scope_var.get() if hasattr(self, '_audit_scope_var') else 'project'
+        if scope == 'global':
+            self._run_osv_global(force=force)
+            return
+        # Project スコープ (既存挙動)
         if not self.current_project:
-            messagebox.showinfo('NodeUpdater', 'Choose a project first.')
+            messagebox.showinfo('NodeUpdater', '先にプロジェクトを選択してください')
             return
         self.audit_text.delete('1.0', 'end')
 
@@ -827,6 +850,93 @@ class App(tk.Tk):
             )
 
         self._run_bg(work, done)
+
+    def _run_osv_global(self, force: bool = False) -> None:
+        """Global パッケージに対する OSV スキャン (推移依存無し: 直接導入分のみ)。
+
+        プロジェクト選択不要。`npm list -g` の結果を `{name, version, direct=True}`
+        として OSV.dev に投げる。
+        """
+        self.audit_text.delete('1.0', 'end')
+        cache_key = 'osv_global_npm'
+        if not force:
+            cached = cache.load(cache_key, _OSV_CACHE_TTL)
+            if cached:
+                self._last_osv = cached
+                self._render_osv(
+                    cached.get('results') or [],
+                    cached.get('scanned') or [],
+                    cached.get('source') or '(cached)',
+                )
+                self._set_status(
+                    f'OSV Global (cache): {len(cached.get("results") or [])} vulnerable / '
+                    f'{len(cached.get("scanned") or [])} scanned'
+                )
+                return
+        self._set_status('Global パッケージを列挙中 (npm list -g)…')
+
+        def work():
+            installed = npm_global.list_global_packages()
+            if not installed:
+                return {'packages_error': 'npm が見つからないか、グローバルパッケージがありません'}
+            deps = [
+                {'name': p['name'], 'version': p.get('version'), 'direct': True, 'dev': False}
+                for p in installed if p.get('version')
+            ]
+            if not deps:
+                return {'packages_error': 'バージョンが特定できる Global パッケージがありません'}
+            source = 'npm list -g (推移依存なし)'
+
+            def on_prog(done_count, total):
+                self._post_progress(done_count, total, 'OSV スキャン (Global)')
+            results = osv.query_batch(
+                [{'name': d['name'], 'version': d['version']} for d in deps],
+                on_progress=on_prog,
+            )
+            results.sort(key=lambda r: min(
+                (osv.SEVERITY_ORDER.get(v['severity'], 99) for v in r['vulns']), default=99
+            ))
+            return {'results': results, 'scanned': deps, 'source': source}
+
+        def done(result, err):
+            if err:
+                self._set_status(f'Error: {err}', color='#c00')
+                return
+            if result.get('packages_error'):
+                self._set_status(result['packages_error'], color='#a60')
+                self.audit_text.insert('end', result['packages_error'] + '\n')
+                return
+            cache.save(cache_key, result)
+            self._last_osv = result
+            self._render_osv(result['results'] or [], result['scanned'], result['source'])
+            self._set_status(
+                f'OSV Global: {len(result["results"] or [])} vulnerable / '
+                f'{len(result["scanned"])} scanned'
+            )
+
+        self._run_bg(work, done)
+
+    def _refresh_audit_buttons(self) -> None:
+        """Audit タブの `npm audit` 系ボタンを scope に応じて enable/disable する。
+
+        Global スコープでは package.json / lockfile を前提とする `npm audit` /
+        `npm audit fix` は走らないため disable。busy 中は触らない (_set_busy が
+        一律 disable しており、解除時に再評価される)。
+        """
+        if self._busy:
+            return
+        is_global = getattr(self, '_audit_scope_var', None) and self._audit_scope_var.get() == 'global'
+        for btn in getattr(self, '_audit_npm_buttons', ()):
+            btn.state(['disabled'] if is_global else ['!disabled'])
+
+    def _on_audit_scope_changed(self) -> None:
+        """Audit タブのスキャン対象切替時、ボタン状態を更新し画面を一旦クリア。"""
+        self._refresh_audit_buttons()
+        # 表示中の OSV 結果は scope を切替えたら一旦消す (誤読防止)
+        self.audit_text.delete('1.0', 'end')
+        self._last_osv = None
+        scope_label = 'Global' if self._audit_scope_var.get() == 'global' else 'プロジェクト'
+        self._set_status(f'監査対象を {scope_label} に切替えました (スキャン実行待ち)')
 
     def _render_osv(self, results: list[dict], scanned: list[dict], source: str) -> None:
         direct = sum(1 for d in scanned if d.get('direct'))
@@ -1127,7 +1237,7 @@ class App(tk.Tk):
         """
         SafeInstallDialog(
             self,
-            title='Safe Install (Global / npm -g)',
+            title='クールダウンインストール (Global / npm -g)',
             pm='npm',
             global_install=True,
             cwd=None,

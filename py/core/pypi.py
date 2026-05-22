@@ -323,7 +323,7 @@ def resolve_for_install(
     spec: str | None,
     cooldown_days: int,
 ) -> dict:
-    """Safe Install 用: spec と cooldown を考慮して install 予定版を決定する。
+    """クールダウンインストール 用: spec と cooldown を考慮して install 予定版を決定する。
 
     フロー:
       1. PyPI JSON API から package metadata を取得
@@ -405,7 +405,7 @@ def resolve_for_install(
 
     reason: str | None = None
     if spec_status == 'unsupported':
-        reason = f'spec "{spec_clean}" は Safe Install では未対応です (== / ~= / >= / <= / > / < / != のみ)'
+        reason = f'spec "{spec_clean}" はクールダウンインストールでは未対応です (== / ~= / >= / <= / > / < / != のみ)'
     elif resolved is None and spec_status == 'exact_pin':
         reason = f'{spec_clean} は cooldown ({cooldown_days}日) を満たしていません'
     elif resolved is None:
