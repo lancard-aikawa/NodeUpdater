@@ -89,6 +89,28 @@ def _python_argv_prefix() -> list[str] | None:
     return [sys.executable, '-m', 'pip']
 
 
+def pip_command_str() -> str:
+    """list_global_packages() と同じインタプリタを指す pip 起動文字列を返す。
+
+    Global の install を一覧と同一インタプリタに揃えるための関数。
+
+    Windows では `py` (ランチャの既定 python) / `python` (PATH 上の python.exe) /
+    `pip` (PATH 上の pip.exe = どこかの python の Scripts) が **別々の python を
+    指すことがある**。一覧は `py -m pip list` で取るのに install を bare `pip` で
+    打つと、入れた先 (pip の python) と一覧 (py の python) がズレて「更新しても
+    反映されない」事故になる。そこで install も _python_argv_prefix() に揃え、
+    `<python> -m pip` 形式 (その python 自身の pip モジュール) で実行する。
+    """
+    prefix = _python_argv_prefix()
+    if not prefix:
+        return 'pip'  # python が見つからない時は従来どおり bare pip にフォールバック
+    exe, *rest = prefix
+    # sys.executable 等にスペースが含まれる場合に備えて quote (py / python は不要)
+    if ' ' in exe and not exe.startswith('"'):
+        exe = f'"{exe}"'
+    return ' '.join([exe, *rest])
+
+
 def list_global_packages() -> list[dict]:
     """`pip list --format=json` の結果を [{name, version}, ...] に整形。
 

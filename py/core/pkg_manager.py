@@ -2,8 +2,9 @@
 
 uv.lock / poetry.lock / Pipfile(.lock) からプロジェクトの PM を推定し、
 それぞれの「最新版に上げる」コマンド文字列を組み立てる。
-Global インストールは常に `pip install -U` を使う (Global タブは
-`pip list` の結果を見ているので、その site-packages を更新するため)。
+Global インストールは一覧 (Global タブの `pip list`) と同じインタプリタの
+`<python> -m pip install -U` を使う (pip_global.pip_command_str())。bare `pip`
+だと PATH 上の別 python に入り、更新しても一覧に反映されないズレが起きるため。
 
 Node 側 node/core/pkg_manager.py と同じインターフェース:
   detect(project_path) -> str
@@ -16,6 +17,8 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+
+from . import pip_global
 
 
 def detect(project_path: Path) -> str:
@@ -37,12 +40,15 @@ def install_command(
 ) -> str:
     """`<pm> add foo==1.2.3 bar==2.0.0 [--dry-run]` 風のコマンド文字列を組み立てる。
 
-    global は常に pip (`pip install -U`) を使う。Global タブの一覧と整合性を取るため。
+    global は一覧と同じインタプリタの `<python> -m pip install -U` を使う
+    (pip_global.pip_command_str())。Global タブの一覧と更新先を一致させるため。
     """
     spec_str = ' '.join(specs)
 
     if global_install:
-        cmd = f'pip install -U {spec_str}'
+        # 一覧 (pip list) と同じインタプリタの pip を使う。bare `pip` だと
+        # PATH 上の別 python に入って「更新しても一覧に反映されない」ズレが起きる。
+        cmd = f'{pip_global.pip_command_str()} install -U {spec_str}'
         if dry_run:
             cmd += ' --dry-run'
         return cmd
