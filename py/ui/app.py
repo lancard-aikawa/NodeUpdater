@@ -883,9 +883,18 @@ class App(tk.Tk):
         cmd = pkg_manager.install_command(pm, specs, global_install=is_global)
         try:
             pip_global.open_command_prompt(cmd, cwd=cwd)
+            # install は別 console で非同期実行されるため、該当スコープのキャッシュを
+            # 今すぐ失効させ、完了後の (force でない) リロードでも pip list を取り直して
+            # current 列に新版が反映されるようにする。これをしないと 24h キャッシュの
+            # 旧 current が張り付く (クールダウンインストールは force refresh 済みで無問題)。
+            if is_global:
+                cache.invalidate_prefix('pypi_global_cd')
+            elif self.current_project:
+                cache.invalidate_prefix(f'pypi_project_{self.current_project}_cd')
             self._set_status(
                 f'別 console で実行中 [{pm}]: {len(specs)} 件を install '
-                f'({"global" if is_global else "project"})' + req_summary
+                f'({"global" if is_global else "project"}) — 完了後リロードしてください'
+                + req_summary
             )
             # 履歴記録 (プロジェクトスコープのみ。global は記録先プロジェクトが無いため除外)
             if not is_global and self.current_project:

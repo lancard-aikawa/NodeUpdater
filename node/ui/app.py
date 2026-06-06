@@ -1329,9 +1329,17 @@ class App(tk.Tk):
         cmd = pkg_manager.install_command(pm, specs, global_install=is_global)
         try:
             npm_global.open_command_prompt(cmd, cwd=cwd)
+            # install は別 console で非同期実行されるため、該当スコープのキャッシュを
+            # 今すぐ失効させ、完了後の (force でない) リロードでも npm list を取り直して
+            # current 列に新版が反映されるようにする (cooldown / workspace 違いの全変種を
+            # 一括失効)。クールダウンインストールは force refresh 済みで無問題。
+            if is_global:
+                cache.invalidate_prefix('global_npm_cd')
+            elif self.current_project:
+                cache.invalidate_prefix(f'project_{self.current_project}_cd')
             self._set_status(
                 f'Opened prompt [{pm}]: install {len(specs)} package(s) '
-                f'({"global" if is_global else "project"})'
+                f'({"global" if is_global else "project"}) — reload after it finishes'
             )
             # 履歴記録 (プロジェクトスコープのみ。global は記録先プロジェクトが無いため除外)
             if not is_global and self.current_project:

@@ -83,3 +83,35 @@ def save(key: str, data: dict) -> None:
     file = cache_dir() / _key_to_filename(key)
     payload = {'cachedAt': int(time.time() * 1000), 'data': data}
     file.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+
+
+def invalidate(key: str) -> None:
+    """指定キーのキャッシュファイルを削除 (best-effort)。
+
+    install 直後など「キャッシュが陳腐化したと分かっている」タイミングで呼び、
+    次回 load を強制的に miss させて再取得させる用途。
+    """
+    file = cache_dir() / _key_to_filename(key)
+    try:
+        file.unlink()
+    except OSError:
+        pass
+
+
+def invalidate_prefix(prefix: str) -> None:
+    """key が prefix で始まるキャッシュファイルをまとめて削除 (best-effort)。
+
+    同じデータが cooldown 値違いで複数キー (`pypi_global_cd7` / `pypi_global_cd0`
+    …) に分かれているため、install 後はそれらを一括失効させたい。filename は
+    `_key_to_filename` で正規化済みなので、prefix も同じ正規化を通して比較する。
+    """
+    safe_prefix = _SAFE_KEY.sub('_', prefix)
+    try:
+        for f in cache_dir().glob('*.json'):
+            if f.name.startswith(safe_prefix):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+    except OSError:
+        pass
